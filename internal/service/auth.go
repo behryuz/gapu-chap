@@ -54,7 +54,7 @@ func (in *RegisterInput) Validate() error {
 	case !usernameRe.MatchString(in.Username):
 		return fmt.Errorf("%w: username must be 3-32 characters: latin letters, digits, underscore", domain.ErrValidation)
 	case in.FirstName == "" || utf8.RuneCountInString(in.FirstName) > 64:
-		return fmt.Errorf("%w: first name must not be longer than 64 characters", domain.ErrValidation)
+		return fmt.Errorf("%w: first_name is required and must be at most 64 characters", domain.ErrValidation)
 	case utf8.RuneCountInString(in.LastName) > 64:
 		return fmt.Errorf("%w: last name must not be longer than 64 characters", domain.ErrValidation)
 	case utf8.RuneCountInString(in.Password) < 8:
@@ -77,10 +77,10 @@ func (s *AuthService) Register(ctx context.Context, in RegisterInput) (*domain.U
 	}
 
 	user := &domain.User{
-		FirstName: in.FirstName,
-		LastName:  in.LastName,
-		Username:  in.Username,
-		Password:  hash,
+		FirstName:    in.FirstName,
+		LastName:     in.LastName,
+		Username:     in.Username,
+		PasswordHash: hash,
 	}
 	if err := s.users.Create(ctx, user); err != nil {
 		return nil, fmt.Errorf("creating user: %w", err)
@@ -97,7 +97,7 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (str
 		return "", fmt.Errorf("getting user by username: %w", err)
 	}
 
-	if !s.hasher.Compare(user.Password, password) {
+	if !s.hasher.Compare(user.PasswordHash, password) {
 		return "", domain.ErrInvalidCredentials
 	}
 

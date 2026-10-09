@@ -23,11 +23,11 @@ func NewUserRepository(pool *pgxpool.Pool) *UserRepository {
 
 func (r *UserRepository) Create(ctx context.Context, u *domain.User) error {
 	const query = `
-			INSERT INTO users (first_name, last_name, username, password)
+			INSERT INTO users (first_name, last_name, username, password_hash)
 			VALUES ($1, $2, $3, $4)
 			returning id, created_at`
 
-	err := r.pool.QueryRow(ctx, query, u.FirstName, u.LastName, u.Username, u.Password).Scan(&u.ID, &u.CreatedAt)
+	err := r.pool.QueryRow(ctx, query, u.FirstName, u.LastName, u.Username, u.PasswordHash).Scan(&u.ID, &u.CreatedAt)
 
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -41,12 +41,12 @@ func (r *UserRepository) Create(ctx context.Context, u *domain.User) error {
 
 func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*domain.User, error) {
 	const query = `
-		SELECT id, first_name, last_name, username, password, created_at
+		SELECT id, first_name, last_name, username, password_hash, created_at
 		FROM users
 		WHERE lower(username) = lower($1)`
 
 	var u domain.User
-	err := r.pool.QueryRow(ctx, query, username).Scan(&u.ID, &u.FirstName, &u.LastName, &u.Username, &u.Password, &u.CreatedAt)
+	err := r.pool.QueryRow(ctx, query, username).Scan(&u.ID, &u.FirstName, &u.LastName, &u.Username, &u.PasswordHash, &u.CreatedAt)
 
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

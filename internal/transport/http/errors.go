@@ -16,9 +16,9 @@ func writeServiceError(w http.ResponseWriter, err error) {
 	case errors.Is(err, domain.ErrNotFound):
 		writeError(w, http.StatusNotFound, domain.ErrNotFound.Error())
 	case errors.Is(err, domain.ErrConflict):
-		writeError(w, http.StatusInternalServerError, domain.ErrConflict.Error())
+		writeError(w, http.StatusConflict, domain.ErrConflict.Error())
 	default:
-		slog.Error("internal server error", err)
+		slog.Error("internal server error", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal server error")
 	}
 }

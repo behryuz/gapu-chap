@@ -36,7 +36,7 @@ func (m *TokenManager) Issue(userID int64, username string) (string, error) {
 
 	signed, err := token.SignedString(m.secret)
 	if err != nil {
-		return "", fmt.Errorf("sing token: %w", err)
+		return "", fmt.Errorf("sign token: %w", err)
 	}
 
 	return signed, nil
