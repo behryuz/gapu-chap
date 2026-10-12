@@ -7,4 +7,5 @@ var (
 	ErrConflict           = errors.New("already exists")
 	ErrValidation         = errors.New("validation failed")
 	ErrInvalidCredentials = errors.New("invalid username or password")
+	ErrForbidden          = errors.New("forbidden")
 )

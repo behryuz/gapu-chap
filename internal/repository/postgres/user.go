@@ -5,14 +5,11 @@ import (
 	"errors"
 	"fmt"
 
-	"gapu-chap/internal/domain"
-
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
-)
 
-const uniqueViolationCode = "23505"
+	"gapu-chap/internal/domain"
+)
 
 type UserRepository struct {
 	pool *pgxpool.Pool
@@ -31,8 +28,7 @@ func (r *UserRepository) Create(ctx context.Context, u *domain.User) error {
 	err := r.pool.QueryRow(ctx, query, u.FirstName, u.LastName, u.Username, u.PasswordHash).Scan(&u.ID, &u.CreatedAt)
 
 	if err != nil {
-		var pgErr *pgconn.PgError
-		if errors.As(err, &pgErr) && pgErr.Code == uniqueViolationCode {
+		if hasPgCode(err, uniqueViolationCode) {
 			return domain.ErrConflict
 		}
 		return fmt.Errorf("creating user: %w", err)

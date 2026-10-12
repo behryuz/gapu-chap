@@ -16,17 +16,32 @@ type RouterDeps struct {
 	Tokens TokenParser
 	Auth   *AuthHandler
 	Users  *UserHandler
+	Rooms  *RoomHandler
 }
 
 func NewRouter(d RouterDeps) http.Handler {
 	mux := http.NewServeMux()
 	authMW := requireAuth(d.Tokens)
 
+	protected := func(pattern string, h http.HandlerFunc) {
+		mux.Handle(pattern, authMW(h))
+	}
+
+	// public
 	mux.HandleFunc("GET /health", handleHealth(d.DB))
 	mux.HandleFunc("POST /api/auth/register", d.Auth.Register)
 	mux.HandleFunc("POST /api/auth/login", d.Auth.Login)
 
-	mux.Handle("GET /api/me", authMW(http.HandlerFunc(d.Users.Me)))
+	// protected
+	protected("GET /api/me", d.Users.Me)
+
+	protected("POST /api/rooms", d.Rooms.Create)
+	protected("GET /api/rooms", d.Rooms.List)
+	protected("GET /api/rooms/{id}", d.Rooms.Get)
+	protected("DELETE /api/rooms/{id}", d.Rooms.Delete)
+	protected("POST /api/rooms/{id}/join", d.Rooms.Join)
+	protected("POST /api/rooms/{id}/leave", d.Rooms.Leave)
+	protected("GET /api/rooms/{id}/members", d.Rooms.Members)
 
 	return logRequest(recoverPanic(mux))
 }

@@ -1,0 +1,199 @@
+package http
+
+import (
+	"context"
+	"errors"
+	"net/http"
+	"time"
+
+	"gapu-chap/internal/domain"
+)
+
+type RoomService interface {
+	Create(ctx context.Context, ownerID int64, name string) (*domain.Room, error)
+	List(ctx context.Context) ([]domain.Room, error)
+	Get(ctx context.Context, id int64) (*domain.Room, error)
+	Delete(ctx context.Context, roomID, actorID int64) error
+	Join(ctx context.Context, roomID, userID int64) error
+	Leave(ctx context.Context, roomID, userID int64) error
+	Members(ctx context.Context, roomID int64) ([]domain.Member, error)
+}
+
+type RoomHandler struct {
+	rooms RoomService
+}
+
+func NewRoomHandler(rooms RoomService) *RoomHandler {
+	return &RoomHandler{rooms: rooms}
+}
+
+type createRoomRequest struct {
+	Name string `json:"name"`
+}
+
+type roomResponse struct {
+	ID        int64     `json:"id"`
+	Name      string    `json:"name"`
+	OwnerID   int64     `json:"owner_id"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+type roomListResponse struct {
+	Rooms []roomResponse `json:"rooms"`
+}
+
+type memberResponse struct {
+	UserID    int64     `json:"user_id"`
+	Username  string    `json:"username"`
+	FirstName string    `json:"first_name"`
+	LastName  string    `json:"last_name,omitempty"`
+	JoinedAt  time.Time `json:"joined_at"`
+}
+
+type memberListResponse struct {
+	Members []memberResponse `json:"members"`
+}
+
+func toRoomResponse(r *domain.Room) roomResponse {
+	return roomResponse{ID: r.ID, Name: r.Name, OwnerID: r.OwnerID, CreatedAt: r.CreatedAt}
+}
+
+func (h *RoomHandler) Create(w http.ResponseWriter, r *http.Request) {
+	authUser, ok := authUserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	var req createRoomRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	room, err := h.rooms.Create(r.Context(), authUser.ID, req.Name)
+	if err != nil {
+		if errors.Is(err, domain.ErrConflict) {
+			writeError(w, http.StatusConflict, "room name already taken")
+			return
+		}
+		writeServiceError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, toRoomResponse(room))
+}
+
+func (h *RoomHandler) List(w http.ResponseWriter, r *http.Request) {
+	rooms, err := h.rooms.List(r.Context())
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	resp := roomListResponse{Rooms: make([]roomResponse, 0, len(rooms))}
+	for i := range rooms {
+		resp.Rooms = append(resp.Rooms, toRoomResponse(&rooms[i]))
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *RoomHandler) Get(w http.ResponseWriter, r *http.Request) {
+	roomID, err := pathID(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	room, err := h.rooms.Get(r.Context(), roomID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toRoomResponse(room))
+}
+
+func (h *RoomHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	authUser, ok := authUserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	roomID, err := pathID(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := h.rooms.Delete(r.Context(), roomID, authUser.ID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *RoomHandler) Join(w http.ResponseWriter, r *http.Request) {
+	authUser, ok := authUserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	roomID, err := pathID(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := h.rooms.Join(r.Context(), roomID, authUser.ID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *RoomHandler) Leave(w http.ResponseWriter, r *http.Request) {
+	authUser, ok := authUserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	roomID, err := pathID(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	if err := h.rooms.Leave(r.Context(), roomID, authUser.ID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *RoomHandler) Members(w http.ResponseWriter, r *http.Request) {
+	roomID, err := pathID(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	members, err := h.rooms.Members(r.Context(), roomID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	resp := memberListResponse{Members: make([]memberResponse, 0, len(members))}
+	for _, m := range members {
+		resp.Members = append(resp.Members, memberResponse{
+			UserID:    m.UserID,
+			Username:  m.Username,
+			FirstName: m.FirstName,
+			LastName:  m.LastName,
+			JoinedAt:  m.JoinedAt,
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}

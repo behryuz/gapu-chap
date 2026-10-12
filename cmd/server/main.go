@@ -47,18 +47,21 @@ func run() error {
 	slog.Info("database connection established")
 
 	userRepo := postgres.NewUserRepository(pool)
+	roomRepo := postgres.NewRoomRepository(pool)
 
 	hasher := auth.NewBcryptHasher(bcrypt.DefaultCost)
 	tokens := auth.NewTokenManager(cfg.JWTSecret, cfg.JWTTTL)
 
 	authService := service.NewAuthService(userRepo, hasher, tokens)
 	userService := service.NewUserService(userRepo)
+	roomService := service.NewRoomService(roomRepo)
 
 	router := httptransport.NewRouter(httptransport.RouterDeps{
 		DB:     pool,
 		Tokens: tokens,
 		Auth:   httptransport.NewAuthHandler(authService),
 		Users:  httptransport.NewUserHandler(userService),
+		Rooms:  httptransport.NewRoomHandler(roomService),
 	})
 
 	srv := &http.Server{

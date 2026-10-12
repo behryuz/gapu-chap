@@ -182,6 +182,7 @@ messages USING GIN (search_vector) -- полнотекстовый поиск
 | `POST` | `/api/rooms/{id}/join` | Войти в комнату | авторизованные |
 | `POST` | `/api/rooms/{id}/leave` | Выйти из комнаты (создатель не может — только удалить) | участники |
 | `GET` | `/api/rooms/{id}/members` | Список участников | авторизованные |
+| `POST` | `/api/rooms/{id}/messages` | Отправить сообщение `{body}` (тот же сервис, что и WebSocket) | участники |
 | `GET` | `/api/rooms/{id}/messages?before=&limit=` | История сообщений | участники |
 | `GET` | `/api/rooms/{id}/messages/search?q=` | Поиск по истории | участники |
 | `POST` | `/api/rooms/{id}/read` | Отметить прочитанным `{message_id}` | участники |

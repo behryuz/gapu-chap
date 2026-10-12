@@ -2,9 +2,10 @@ package http
 
 import (
 	"errors"
-	"gapu-chap/internal/domain"
 	"log/slog"
 	"net/http"
+
+	"gapu-chap/internal/domain"
 )
 
 func writeServiceError(w http.ResponseWriter, err error) {
@@ -17,6 +18,8 @@ func writeServiceError(w http.ResponseWriter, err error) {
 		writeError(w, http.StatusNotFound, domain.ErrNotFound.Error())
 	case errors.Is(err, domain.ErrConflict):
 		writeError(w, http.StatusConflict, domain.ErrConflict.Error())
+	case errors.Is(err, domain.ErrForbidden):
+		writeError(w, http.StatusForbidden, err.Error())
 	default:
 		slog.Error("internal server error", "error", err)
 		writeError(w, http.StatusInternalServerError, "internal server error")
