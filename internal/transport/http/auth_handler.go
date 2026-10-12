@@ -3,10 +3,10 @@ package http
 import (
 	"context"
 	"errors"
+	"net/http"
+
 	"gapu-chap/internal/domain"
 	"gapu-chap/internal/service"
-	"net/http"
-	"time"
 )
 
 type AuthService interface {
@@ -34,26 +34,8 @@ type loginRequest struct {
 	Password string `json:"password"`
 }
 
-type userResponse struct {
-	ID        int64     `json:"id"`
-	FirstName string    `json:"first_name"`
-	LastName  string    `json:"last_name,omitempty"`
-	Username  string    `json:"username"`
-	CreatedAt time.Time `json:"created_at"`
-}
-
 type tokenResponse struct {
 	Token string `json:"token"`
-}
-
-func toUserResponse(u *domain.User) userResponse {
-	return userResponse{
-		ID:        u.ID,
-		FirstName: u.FirstName,
-		LastName:  u.LastName,
-		Username:  u.Username,
-		CreatedAt: u.CreatedAt,
-	}
 }
 
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {

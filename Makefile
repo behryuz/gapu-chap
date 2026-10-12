@@ -4,13 +4,16 @@ export
 MIGRATIONS_DIR := migrations
 GOOSE := go tool goose -dir $(MIGRATIONS_DIR) postgres "$(DATABASE_URL)"
 
-.PHONY: run build db-up db-down migrate-up migrate-down migrate-status migrate-create
+.PHONY: run build db-up db-down migrate-up migrate-down migrate-status migrate-create test lint
 
 run:
 	go run ./cmd/server
 
 build:
 	go build -o bin/server ./cmd/server
+
+test:
+	go test -race -count=1 ./...
 
 db-up:
 	docker compose up -d
@@ -30,3 +33,6 @@ migrate-status:
 # использование: make migrate-create name=create_rooms
 migrate-create:
 	go tool goose -dir $(MIGRATIONS_DIR) -s create $(name) sql
+
+lint:
+	go tool golangci-lint run ./...

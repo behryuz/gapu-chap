@@ -11,15 +11,24 @@ type HealthChecker interface {
 	Ping(ctx context.Context) error
 }
 
-func NewRouter(db HealthChecker, auth *AuthHandler) http.Handler {
+type RouterDeps struct {
+	DB     HealthChecker
+	Tokens TokenParser
+	Auth   *AuthHandler
+	Users  *UserHandler
+}
+
+func NewRouter(d RouterDeps) http.Handler {
 	mux := http.NewServeMux()
+	authMW := requireAuth(d.Tokens)
 
-	mux.HandleFunc("GET /health", handleHealth(db))
+	mux.HandleFunc("GET /health", handleHealth(d.DB))
+	mux.HandleFunc("POST /api/auth/register", d.Auth.Register)
+	mux.HandleFunc("POST /api/auth/login", d.Auth.Login)
 
-	mux.HandleFunc("POST /api/auth/register", auth.Register)
-	mux.HandleFunc("POST /api/auth/login", auth.Login)
+	mux.Handle("GET /api/me", authMW(http.HandlerFunc(d.Users.Me)))
 
-	return mux
+	return logRequest(recoverPanic(mux))
 }
 
 func handleHealth(db HealthChecker) http.HandlerFunc {

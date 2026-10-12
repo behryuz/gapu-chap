@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"gapu-chap/internal/domain"
 
 	"github.com/jackc/pgx/v5"
@@ -53,6 +54,23 @@ func (r *UserRepository) GetByUsername(ctx context.Context, username string) (*d
 			return nil, domain.ErrNotFound
 		}
 		return nil, fmt.Errorf("select user by username: %w", err)
+	}
+	return &u, nil
+}
+
+func (r *UserRepository) GetByID(ctx context.Context, id int64) (*domain.User, error) {
+	const query = `
+		SELECT id, first_name, last_name, username, password_hash, created_at
+		FROM users
+		WHERE id = $1`
+
+	var u domain.User
+	err := r.pool.QueryRow(ctx, query, id).Scan(&u.ID, &u.FirstName, &u.LastName, &u.Username, &u.PasswordHash, &u.CreatedAt)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrNotFound
+		}
+		return nil, fmt.Errorf("select user by id: %w", err)
 	}
 	return &u, nil
 }

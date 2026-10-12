@@ -4,15 +4,17 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"gapu-chap/internal/domain"
 	"regexp"
 	"strings"
 	"unicode/utf8"
+
+	"gapu-chap/internal/domain"
 )
 
 type UserRepository interface {
 	Create(ctx context.Context, user *domain.User) error
 	GetByUsername(ctx context.Context, username string) (*domain.User, error)
+	GetByID(ctx context.Context, id int64) (*domain.User, error)
 }
 
 type PasswordHasher interface {
@@ -49,25 +51,25 @@ func (in *RegisterInput) normalize() {
 	in.Username = strings.TrimSpace(in.Username)
 }
 
-func (in *RegisterInput) Validate() error {
+func (in *RegisterInput) validate() error {
 	switch {
 	case !usernameRe.MatchString(in.Username):
 		return fmt.Errorf("%w: username must be 3-32 characters: latin letters, digits, underscore", domain.ErrValidation)
 	case in.FirstName == "" || utf8.RuneCountInString(in.FirstName) > 64:
 		return fmt.Errorf("%w: first_name is required and must be at most 64 characters", domain.ErrValidation)
 	case utf8.RuneCountInString(in.LastName) > 64:
-		return fmt.Errorf("%w: last name must not be longer than 64 characters", domain.ErrValidation)
+		return fmt.Errorf("%w: last_name must not be longer than 64 characters", domain.ErrValidation)
 	case utf8.RuneCountInString(in.Password) < 8:
 		return fmt.Errorf("%w: password must contain at least 8 characters", domain.ErrValidation)
 	case len(in.Password) > 72:
-		return fmt.Errorf("%w: password must not exceed 72 characters", domain.ErrValidation)
+		return fmt.Errorf("%w: password must not exceed 72 bytes", domain.ErrValidation)
 	}
 	return nil
 }
 
 func (s *AuthService) Register(ctx context.Context, in RegisterInput) (*domain.User, error) {
 	in.normalize()
-	if err := in.Validate(); err != nil {
+	if err := in.validate(); err != nil {
 		return nil, err
 	}
 

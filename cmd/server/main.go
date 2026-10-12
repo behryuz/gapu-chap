@@ -4,17 +4,18 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"gapu-chap/internal/auth"
-	"gapu-chap/internal/config"
-	"gapu-chap/internal/repository/postgres"
-	"gapu-chap/internal/service"
-	httptransport "gapu-chap/internal/transport/http"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
 	"time"
+
+	"gapu-chap/internal/auth"
+	"gapu-chap/internal/config"
+	"gapu-chap/internal/repository/postgres"
+	"gapu-chap/internal/service"
+	httptransport "gapu-chap/internal/transport/http"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -51,11 +52,18 @@ func run() error {
 	tokens := auth.NewTokenManager(cfg.JWTSecret, cfg.JWTTTL)
 
 	authService := service.NewAuthService(userRepo, hasher, tokens)
-	authHandler := httptransport.NewAuthHandler(authService)
+	userService := service.NewUserService(userRepo)
+
+	router := httptransport.NewRouter(httptransport.RouterDeps{
+		DB:     pool,
+		Tokens: tokens,
+		Auth:   httptransport.NewAuthHandler(authService),
+		Users:  httptransport.NewUserHandler(userService),
+	})
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           httptransport.NewRouter(pool, authHandler),
+		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
 
