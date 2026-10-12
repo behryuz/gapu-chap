@@ -137,7 +137,7 @@ gapu-chap/
 users          (id, username UNIQUE, password_hash, role ['user'|'moderator'],
                 is_banned, created_at)
 
-rooms          (id, name, kind ['public'|'direct'], owner_id → users, created_at)
+rooms          (id, name UNIQUE без учёта регистра, kind ['public'|'direct'], owner_id → users, created_at)
 
 room_members   (room_id → rooms, user_id → users, joined_at,
                 last_read_message_id,           -- отметка «прочитано»
@@ -177,10 +177,11 @@ messages USING GIN (search_vector) -- полнотекстовый поиск
 | `GET` | `/api/me` | Текущий пользователь | авторизованные |
 | `GET` | `/api/rooms` | Список публичных комнат | авторизованные |
 | `POST` | `/api/rooms` | Создать комнату `{name}` | авторизованные |
-| `GET` | `/api/rooms/{id}` | Информация о комнате | участники |
+| `GET` | `/api/rooms/{id}` | Информация о комнате | авторизованные |
 | `DELETE` | `/api/rooms/{id}` | Удалить комнату | **только создатель** |
 | `POST` | `/api/rooms/{id}/join` | Войти в комнату | авторизованные |
-| `POST` | `/api/rooms/{id}/leave` | Выйти из комнаты | участники |
+| `POST` | `/api/rooms/{id}/leave` | Выйти из комнаты (создатель не может — только удалить) | участники |
+| `GET` | `/api/rooms/{id}/members` | Список участников | авторизованные |
 | `GET` | `/api/rooms/{id}/messages?before=&limit=` | История сообщений | участники |
 | `GET` | `/api/rooms/{id}/messages/search?q=` | Поиск по истории | участники |
 | `POST` | `/api/rooms/{id}/read` | Отметить прочитанным `{message_id}` | участники |
