@@ -65,7 +65,7 @@ func (s *MessageService) History(ctx context.Context, roomID, userID int64, q Hi
 	}
 	q.Limit = min(q.Limit, maxHistoryLimit)
 
-	messages, err := s.messages.ListByRoom(ctx, roomID, userID, q.Limit)
+	messages, err := s.messages.ListByRoom(ctx, roomID, q.BeforeID, q.Limit)
 	if err != nil {
 		return nil, fmt.Errorf("list messages in room %d: %w", roomID, err)
 	}

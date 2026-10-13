@@ -1,5 +1,5 @@
 -- +goose Up
-CREATE TABLE IF NOT EXISTS users
+CREATE TABLE users
 (
     id            BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     first_name    TEXT        NOT NULL,
@@ -14,4 +14,4 @@ CREATE TABLE IF NOT EXISTS users
 CREATE UNIQUE INDEX users_username_lower_idx ON users (lower(username));
 
 -- +goose Down
-DROP TABLE IF EXISTS users;
+DROP TABLE users;

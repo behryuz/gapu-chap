@@ -1,5 +1,5 @@
 -- +goose Up
-CREATE TABLE IF NOT EXISTS rooms
+CREATE TABLE rooms
 (
     id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     name       TEXT        NOT NULL,
@@ -12,7 +12,7 @@ CREATE TABLE IF NOT EXISTS rooms
 CREATE UNIQUE INDEX rooms_name_lower_idx ON rooms (lower(name));
 CREATE INDEX rooms_owner_id_idx ON rooms (owner_id);
 
-CREATE TABLE IF NOT EXISTS room_members
+CREATE TABLE room_members
 (
     room_id   BIGINT      NOT NULL REFERENCES rooms (id) ON DELETE CASCADE,
     user_id   BIGINT      NOT NULL REFERENCES users (id) ON DELETE CASCADE,
@@ -24,5 +24,5 @@ CREATE TABLE IF NOT EXISTS room_members
 CREATE INDEX room_members_user_id_idx ON room_members (user_id);
 
 -- +goose Down
-DROP TABLE IF EXISTS room_members;
-DROP TABLE IF EXISTS rooms;
+DROP TABLE room_members;
+DROP TABLE rooms;

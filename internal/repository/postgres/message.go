@@ -21,7 +21,7 @@ func NewMessageRepository(pool *pgxpool.Pool) *MessageRepository {
 
 func scanMessage(row pgx.Row) (domain.Message, error) {
 	var m domain.Message
-	err := row.Scan(&m.ID, &m.RoomID, &m.AuthorID, &m.Body, &m.CreatedAt)
+	err := row.Scan(&m.ID, &m.RoomID, &m.AuthorID, &m.AuthorUsername, &m.Body, &m.CreatedAt)
 	return m, err
 }
 

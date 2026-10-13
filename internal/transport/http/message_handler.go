@@ -36,7 +36,7 @@ type messageResponse struct {
 	RoomID    int64          `json:"room_id"`
 	Author    authorResponse `json:"author"`
 	Body      string         `json:"body"`
-	CreatedAt time.Time      `json:"created"`
+	CreatedAt time.Time      `json:"created_at"`
 }
 
 type messageListResponse struct {
@@ -101,6 +101,7 @@ func (h *MessageHandler) History(w http.ResponseWriter, r *http.Request) {
 	limit, err := queryInt64(r, "limit")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
+		return
 	}
 
 	messages, err := h.messages.History(r.Context(), roomID, authUser.ID, service.HistoryQuery{

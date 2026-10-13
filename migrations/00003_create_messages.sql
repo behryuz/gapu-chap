@@ -1,5 +1,5 @@
 -- +goose Up
-CREATE TABLE IF NOT EXISTS messages
+CREATE TABLE messages
 (
     id         BIGINT GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
     room_id    BIGINT      NOT NULL REFERENCES rooms (id) ON DELETE CASCADE,
@@ -14,4 +14,4 @@ CREATE INDEX messages_room_id_id_idx ON messages (room_id, id DESC);
 CREATE INDEX messages_author_id_idx ON messages (author_id);
 
 -- +goose Down
-DROP TABLE IF EXISTS messages
+DROP TABLE messages

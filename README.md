@@ -117,9 +117,9 @@ gapu-chap/
 │       │   └── message_handler.go
 │       └── ws/
 │           ├── hub.go           # реестр подключений и рассылка по комнатам
-│           ├── client.go        # одно соединение: readPump / writePump
+│           ├── client.go        # одно соединение: очередь send, writePump
 │           ├── events.go        # типы входящих/исходящих событий
-│           └── handler.go       # HTTP → WebSocket upgrade
+│           └── server.go        # HTTP → WebSocket upgrade, readLoop, обработка событий
 ├── migrations/
 │   └── 00001_init.sql
 ├── docker-compose.yml
@@ -227,33 +227,46 @@ messages USING GIN (search_vector) -- полнотекстовый поиск
 | `message.read` | `{ "room_id", "user_id", "message_id" }` | Кто-то прочитал |
 | `presence` | `{ "user_id", "username", "online": true }` | Пользователь появился/ушёл |
 | `room.deleted` | `{ "room_id" }` | Комната удалена владельцем |
+| `room.subscribed` | `{ "room_id" }` | Подтверждение подписки |
 | `error` | `{ "message": "..." }` | Ошибка обработки события |
 
 ### Как работает WebSocket-часть (паттерн Hub)
 
 ```
-           ┌──────────── Hub (одна горутина) ─────────────┐
-           │ clients  map[*Client]struct{}                │
-           │ rooms    map[roomID]map[*Client]struct{}     │
-           │ online   map[userID]int  (кол-во соединений) │
-           └──▲───────────────▲───────────────────┬───────┘
-     register │    unregister │         broadcast │
-              │               │                   ▼
-   ┌──────────┴───┐                       ┌──────────────┐
-   │   Client     │  readPump  ──► service.SendMessage() ─► БД
-   │  (1 на conn) │  writePump ◄── chan send []byte       │
-   └──────────────┘
+  REST POST /messages ─┐
+                       ▼
+  ws: message.send ──► MessageService.Send ──► БД
+                       │
+                       └─► MessagePublisher.PublishMessage  (интерфейс сервиса)
+                                     │
+                         ┌───────────▼─────────── Hub (sync.RWMutex) ─┐
+                         │ clients map[*Client]struct{}               │
+                         │ rooms   map[roomID]map[*Client]struct{}    │
+                         └───────────┬────────────────────────────────┘
+                                     │ enqueue (без блокировки)
+                         ┌───────────▼───┐
+                         │ Client        │ readLoop  ◄── сокет (события клиента)
+                         │ (1 на conn)   │ writePump ──► сокет (chan send + ping)
+                         └───────────────┘
 ```
 
-- У каждого клиента **две горутины**: `readPump` читает из сокета, `writePump` пишет в сокет
-  из буферизованного канала `send`. В сокет пишет только одна горутина — это требование библиотеки.
-- **Hub владеет картами** и меняет их только сам (через каналы) — никаких гонок без мьютексов.
-  (Альтернатива — `sync.RWMutex`; оба подхода допустимы.)
-- Сообщение **сначала сохраняется в БД** через сервис, и только потом рассылается — так у
-  него есть `id` и `created_at`, а история и real-time не расходятся.
-- Если канал `send` клиента переполнен (медленный клиент) — соединение закрывается, чтобы
-  не тормозить остальных.
-- Ping/pong раз в N секунд для обнаружения «мёртвых» соединений.
+- У каждого соединения **две горутины** (через `errgroup`): `readLoop` читает события
+  из сокета, `writePump` пишет в сокет из буферизованного канала `send` и шлёт ping.
+  Если одна из них завершилась — отменяется контекст и завершается вторая.
+- **Hub защищён `sync.RWMutex`**: рассылка (частая операция) берёт read-lock,
+  подписка/отписка — write-lock.
+- **Сервис не знает про WebSocket**: он зависит от интерфейса `MessagePublisher`, который
+  реализует Hub. Поэтому сообщение, отправленное и через REST, и через WebSocket,
+  одинаково сохраняется и рассылается.
+- Сообщение **сначала сохраняется в БД**, и только потом рассылается — у него есть `id`
+  и `created_at`, история и real-time не расходятся.
+- Если канал `send` клиента переполнен (медленный клиент) — соединение закрывается
+  (`StatusPolicyViolation`), чтобы не тормозить остальных.
+- Ping раз в 30 секунд для обнаружения «мёртвых» соединений.
+- При остановке сервера Hub закрывает все соединения со статусом `GoingAway`
+  (`http.Server.RegisterOnShutdown`).
+- Ограничение: Hub живёт в памяти одного процесса. Для нескольких инстансов сервера
+  нужен общий брокер (Redis Pub/Sub, PostgreSQL `LISTEN/NOTIFY`).
 
 ---
 
