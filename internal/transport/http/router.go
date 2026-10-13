@@ -12,11 +12,12 @@ type HealthChecker interface {
 }
 
 type RouterDeps struct {
-	DB     HealthChecker
-	Tokens TokenParser
-	Auth   *AuthHandler
-	Users  *UserHandler
-	Rooms  *RoomHandler
+	DB       HealthChecker
+	Tokens   TokenParser
+	Auth     *AuthHandler
+	Users    *UserHandler
+	Rooms    *RoomHandler
+	Messages *MessageHandler
 }
 
 func NewRouter(d RouterDeps) http.Handler {
@@ -42,6 +43,8 @@ func NewRouter(d RouterDeps) http.Handler {
 	protected("POST /api/rooms/{id}/join", d.Rooms.Join)
 	protected("POST /api/rooms/{id}/leave", d.Rooms.Leave)
 	protected("GET /api/rooms/{id}/members", d.Rooms.Members)
+	protected("POST /api/rooms/{id}/messages", d.Messages.Send)
+	protected("GET /api/rooms/{id}/messages", d.Messages.History)
 
 	return logRequest(recoverPanic(mux))
 }

@@ -28,3 +28,15 @@ func pathID(r *http.Request, name string) (int64, error) {
 	}
 	return id, nil
 }
+
+func queryInt64(r *http.Request, name string) (int64, error) {
+	raw := r.URL.Query().Get(name)
+	if raw == "" {
+		return 0, nil
+	}
+	v, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || v < 0 {
+		return 0, fmt.Errorf("invalid query parameter: %q", name)
+	}
+	return v, nil
+}

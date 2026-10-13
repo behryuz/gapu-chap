@@ -148,3 +148,16 @@ func (r *RoomRepository) ListMembers(ctx context.Context, roomID int64) ([]domai
 	}
 	return members, nil
 }
+
+func (r *RoomRepository) IsMember(ctx context.Context, roomID, userID int64) (bool, error) {
+	const query = `
+		SELECT EXISTS (
+			SELECT 1 FROM room_members WHERE room_id = $1 AND user_id = $2
+		)`
+
+	var isMember bool
+	if err := r.pool.QueryRow(ctx, query, roomID, userID).Scan(&isMember); err != nil {
+		return false, fmt.Errorf("check room membership: %w", err)
+	}
+	return isMember, nil
+}

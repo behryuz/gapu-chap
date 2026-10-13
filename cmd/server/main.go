@@ -48,6 +48,7 @@ func run() error {
 
 	userRepo := postgres.NewUserRepository(pool)
 	roomRepo := postgres.NewRoomRepository(pool)
+	messageRepo := postgres.NewMessageRepository(pool)
 
 	hasher := auth.NewBcryptHasher(bcrypt.DefaultCost)
 	tokens := auth.NewTokenManager(cfg.JWTSecret, cfg.JWTTTL)
@@ -55,13 +56,15 @@ func run() error {
 	authService := service.NewAuthService(userRepo, hasher, tokens)
 	userService := service.NewUserService(userRepo)
 	roomService := service.NewRoomService(roomRepo)
+	messageService := service.NewMessageService(messageRepo, roomRepo)
 
 	router := httptransport.NewRouter(httptransport.RouterDeps{
-		DB:     pool,
-		Tokens: tokens,
-		Auth:   httptransport.NewAuthHandler(authService),
-		Users:  httptransport.NewUserHandler(userService),
-		Rooms:  httptransport.NewRoomHandler(roomService),
+		DB:       pool,
+		Tokens:   tokens,
+		Auth:     httptransport.NewAuthHandler(authService),
+		Users:    httptransport.NewUserHandler(userService),
+		Rooms:    httptransport.NewRoomHandler(roomService),
+		Messages: httptransport.NewMessageHandler(messageService),
 	})
 
 	srv := &http.Server{
