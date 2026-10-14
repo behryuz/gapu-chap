@@ -17,6 +17,7 @@ type RoomRepository interface {
 	AddMember(ctx context.Context, roomID, userID int64) error
 	RemoveMember(ctx context.Context, roomID, userID int64) error
 	ListMembers(ctx context.Context, roomID int64) ([]domain.Member, error)
+	IsMember(ctx context.Context, roomID, userID int64) (bool, error)
 }
 
 type RoomService struct {
@@ -111,4 +112,15 @@ func (s *RoomService) Members(ctx context.Context, roomID int64) ([]domain.Membe
 		return nil, fmt.Errorf("list members of room %d: %w", roomID, err)
 	}
 	return members, nil
+}
+
+func (s *RoomService) RequireMember(ctx context.Context, roomID, userID int64) error {
+	ok, err := s.rooms.IsMember(ctx, roomID, userID)
+	if err != nil {
+		return fmt.Errorf("check membership in room %d: %w", roomID, err)
+	}
+	if !ok {
+		return fmt.Errorf("%w: you are not a member of this room", domain.ErrForbidden)
+	}
+	return nil
 }

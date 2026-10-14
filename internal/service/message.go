@@ -18,13 +18,18 @@ type MembershipChecker interface {
 	IsMember(ctx context.Context, roomID, userID int64) (bool, error)
 }
 
-type MessageService struct {
-	messages MessageRepository
-	members  MembershipChecker
+type MessagePublisher interface {
+	PublishMessage(msg *domain.Message)
 }
 
-func NewMessageService(messages MessageRepository, members MembershipChecker) *MessageService {
-	return &MessageService{messages: messages, members: members}
+type MessageService struct {
+	messages  MessageRepository
+	members   MembershipChecker
+	publisher MessagePublisher
+}
+
+func NewMessageService(messages MessageRepository, members MembershipChecker, publisher MessagePublisher) *MessageService {
+	return &MessageService{messages: messages, members: members, publisher: publisher}
 }
 
 const (
@@ -47,6 +52,8 @@ func (s *MessageService) Send(ctx context.Context, roomID, authorID int64, body 
 	if err := s.messages.Create(ctx, msg); err != nil {
 		return nil, fmt.Errorf("create message in room %d: %w", roomID, err)
 	}
+
+	s.publisher.PublishMessage(msg)
 	return msg, nil
 }
 

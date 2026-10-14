@@ -24,6 +24,10 @@ func newFakeRoomRepo() *fakeRoomRepo {
 	}
 }
 
+func (r *fakeRoomRepo) IsMember(_ context.Context, roomID, userID int64) (bool, error) {
+	return r.isMember(roomID, userID), nil
+}
+
 func (r *fakeRoomRepo) Create(_ context.Context, room *domain.Room) error {
 	r.nextID++
 	room.ID = r.nextID

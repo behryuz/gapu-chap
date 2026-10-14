@@ -51,14 +51,23 @@ const (
 	strangerID int64 = 2
 )
 
-func newTestMessageService() (*service.MessageService, *fakeMessageRepo) {
+type fakePublisher struct {
+	published []domain.Message
+}
+
+func (p *fakePublisher) PublishMessage(msg *domain.Message) {
+	p.published = append(p.published, *msg)
+}
+
+func newTestMessageService() (*service.MessageService, *fakeMessageRepo, *fakePublisher) {
 	repo := &fakeMessageRepo{}
 	members := fakeMembership{{testRoomID, memberID}: true}
-	return service.NewMessageService(repo, members), repo
+	pub := &fakePublisher{}
+	return service.NewMessageService(repo, members, pub), repo, pub
 }
 
 func TestSend_Success(t *testing.T) {
-	svc, repo := newTestMessageService()
+	svc, repo, pub := newTestMessageService()
 
 	msg, err := svc.Send(t.Context(), testRoomID, memberID, "  hello  ")
 	if err != nil {
@@ -72,6 +81,9 @@ func TestSend_Success(t *testing.T) {
 	}
 	if len(repo.messages) != 1 {
 		t.Errorf("expected 1 stored message, got %d", len(repo.messages))
+	}
+	if len(pub.published) != 1 {
+		t.Errorf("message must be published")
 	}
 }
 
@@ -87,7 +99,7 @@ func TestSend_Validation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc, repo := newTestMessageService()
+			svc, repo, pub := newTestMessageService()
 
 			_, err := svc.Send(t.Context(), testRoomID, memberID, tt.body)
 			if !errors.Is(err, domain.ErrValidation) {
@@ -96,12 +108,15 @@ func TestSend_Validation(t *testing.T) {
 			if len(repo.messages) != 0 {
 				t.Error("invalid message must not be stored")
 			}
+			if len(pub.published) != 0 {
+				t.Error("invalid message must not be published")
+			}
 		})
 	}
 }
 
 func TestSend_NotMemberForbidden(t *testing.T) {
-	svc, repo := newTestMessageService()
+	svc, repo, pub := newTestMessageService()
 
 	_, err := svc.Send(t.Context(), testRoomID, strangerID, "hi")
 	if !errors.Is(err, domain.ErrForbidden) {
@@ -110,10 +125,13 @@ func TestSend_NotMemberForbidden(t *testing.T) {
 	if len(repo.messages) != 0 {
 		t.Error("message from non-member must not be stored")
 	}
+	if len(pub.published) != 0 {
+		t.Error("message from non-member must not be published")
+	}
 }
 
 func TestHistory_NotMemberForbidden(t *testing.T) {
-	svc, _ := newTestMessageService()
+	svc, _, _ := newTestMessageService()
 
 	_, err := svc.History(t.Context(), testRoomID, strangerID, service.HistoryQuery{})
 	if !errors.Is(err, domain.ErrForbidden) {
@@ -122,7 +140,7 @@ func TestHistory_NotMemberForbidden(t *testing.T) {
 }
 
 func TestHistory_Pagination(t *testing.T) {
-	svc, _ := newTestMessageService()
+	svc, _, _ := newTestMessageService()
 	for range 5 {
 		if _, err := svc.Send(t.Context(), testRoomID, memberID, "msg"); err != nil {
 			t.Fatalf("send: %v", err)
@@ -150,7 +168,7 @@ func TestHistory_Pagination(t *testing.T) {
 }
 
 func TestHistory_LimitClamped(t *testing.T) {
-	svc, _ := newTestMessageService()
+	svc, _, _ := newTestMessageService()
 	for range 150 {
 		if _, err := svc.Send(t.Context(), testRoomID, memberID, "msg"); err != nil {
 			t.Fatalf("send: %v", err)

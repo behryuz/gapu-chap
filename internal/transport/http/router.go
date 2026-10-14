@@ -18,6 +18,7 @@ type RouterDeps struct {
 	Users    *UserHandler
 	Rooms    *RoomHandler
 	Messages *MessageHandler
+	WS       http.Handler
 }
 
 func NewRouter(d RouterDeps) http.Handler {
@@ -32,6 +33,7 @@ func NewRouter(d RouterDeps) http.Handler {
 	mux.HandleFunc("GET /health", handleHealth(d.DB))
 	mux.HandleFunc("POST /api/auth/register", d.Auth.Register)
 	mux.HandleFunc("POST /api/auth/login", d.Auth.Login)
+	mux.Handle("GET /ws", d.WS)
 
 	// protected
 	protected("GET /api/me", d.Users.Me)

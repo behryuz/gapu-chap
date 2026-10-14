@@ -16,6 +16,7 @@ import (
 	"gapu-chap/internal/repository/postgres"
 	"gapu-chap/internal/service"
 	httptransport "gapu-chap/internal/transport/http"
+	"gapu-chap/internal/transport/ws"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -53,10 +54,12 @@ func run() error {
 	hasher := auth.NewBcryptHasher(bcrypt.DefaultCost)
 	tokens := auth.NewTokenManager(cfg.JWTSecret, cfg.JWTTTL)
 
+	hub := ws.NewHub()
+
 	authService := service.NewAuthService(userRepo, hasher, tokens)
 	userService := service.NewUserService(userRepo)
 	roomService := service.NewRoomService(roomRepo)
-	messageService := service.NewMessageService(messageRepo, roomRepo)
+	messageService := service.NewMessageService(messageRepo, roomRepo, hub)
 
 	router := httptransport.NewRouter(httptransport.RouterDeps{
 		DB:       pool,
@@ -65,6 +68,7 @@ func run() error {
 		Users:    httptransport.NewUserHandler(userService),
 		Rooms:    httptransport.NewRoomHandler(roomService),
 		Messages: httptransport.NewMessageHandler(messageService),
+		WS:       ws.NewServer(hub, tokens, messageService, roomService),
 	})
 
 	srv := &http.Server{
@@ -72,6 +76,7 @@ func run() error {
 		Handler:           router,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
+	srv.RegisterOnShutdown(hub.CloseAll)
 
 	serverErr := make(chan error, 1)
 	go func() {
