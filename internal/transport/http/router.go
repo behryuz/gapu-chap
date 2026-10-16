@@ -18,6 +18,7 @@ type RouterDeps struct {
 	Users    *UserHandler
 	Rooms    *RoomHandler
 	Messages *MessageHandler
+	Presence *PresenceHandler
 	WS       http.Handler
 }
 
@@ -37,6 +38,7 @@ func NewRouter(d RouterDeps) http.Handler {
 
 	// protected
 	protected("GET /api/me", d.Users.Me)
+	protected("GET /api/users/online", d.Presence.Online)
 
 	protected("POST /api/rooms", d.Rooms.Create)
 	protected("GET /api/rooms", d.Rooms.List)

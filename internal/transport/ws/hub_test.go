@@ -1,12 +1,42 @@
 package ws
 
 import (
+	"encoding/json"
 	"sync"
 	"testing"
 )
 
+// Клиент без реального соединения. Буфер большой, чтобы в тестах
+// никогда не сработало закрытие «медленного клиента» (conn здесь nil).
 func newTestClient(userID int64) *Client {
-	return newClient(nil, userID, "user")
+	return &Client{
+		userID:   userID,
+		username: "user",
+		send:     make(chan []byte, 1024),
+		rooms:    make(map[int64]struct{}),
+	}
+}
+
+// drain забирает всё, что накопилось в очереди клиента, и возвращает типы событий.
+func drain(t *testing.T, c *Client) []string {
+	t.Helper()
+
+	var types []string
+	for {
+		select {
+		case data := <-c.send:
+			var ev struct {
+				Type string `json:"type"`
+			}
+			if err := json.Unmarshal(data, &ev); err != nil {
+				types = append(types, string(data))
+				continue
+			}
+			types = append(types, ev.Type)
+		default:
+			return types
+		}
+	}
 }
 
 func TestHub_BroadcastOnlyToSubscribers(t *testing.T) {
@@ -18,6 +48,9 @@ func TestHub_BroadcastOnlyToSubscribers(t *testing.T) {
 	h.subscribe(1, alice)
 	h.subscribe(1, bob)
 	h.subscribe(2, carol)
+	for _, c := range []*Client{alice, bob, carol} {
+		drain(t, c)
+	}
 
 	h.broadcast(1, []byte("hello"))
 
@@ -35,6 +68,7 @@ func TestHub_UnsubscribeAndUnregister(t *testing.T) {
 	h.register(c)
 	h.subscribe(1, c)
 	h.subscribe(2, c)
+	drain(t, c)
 
 	h.unsubscribe(1, c)
 	h.broadcast(1, []byte("hello"))
@@ -51,6 +85,105 @@ func TestHub_UnsubscribeAndUnregister(t *testing.T) {
 	}
 }
 
+func TestHub_Presence_MultipleConnections(t *testing.T) {
+	h := NewHub()
+	observer := newTestClient(100)
+	h.register(observer)
+	drain(t, observer)
+
+	tab1, tab2 := newTestClient(1), newTestClient(1)
+
+	h.register(tab1)
+	h.register(tab2)
+	if got := drain(t, observer); len(got) != 1 || got[0] != typePresence {
+		t.Fatalf("expected exactly one presence event for two tabs, got %v", got)
+	}
+	if n := len(h.OnlineUsers()); n != 2 {
+		t.Fatalf("expected 2 online users, got %d", n)
+	}
+
+	h.unregister(tab1)
+	if got := drain(t, observer); len(got) != 0 {
+		t.Fatalf("user still has an open tab, expected no events, got %v", got)
+	}
+
+	h.unregister(tab2)
+	if got := drain(t, observer); len(got) != 1 || got[0] != typePresence {
+		t.Fatalf("expected offline presence event, got %v", got)
+	}
+	if n := len(h.OnlineUsers()); n != 1 {
+		t.Fatalf("expected only observer online, got %d", n)
+	}
+}
+
+func TestHub_UnregisterTwice(t *testing.T) {
+	h := NewHub()
+	tab1, tab2 := newTestClient(1), newTestClient(1)
+	h.register(tab1)
+	h.register(tab2)
+
+	h.unregister(tab1)
+	h.unregister(tab1)
+
+	if n := len(h.OnlineUsers()); n != 1 {
+		t.Fatalf("repeated unregister must not mark user offline, online=%d", n)
+	}
+}
+
+func TestHub_MemberLeft(t *testing.T) {
+	h := NewHub()
+	tab1, tab2, other := newTestClient(1), newTestClient(1), newTestClient(2)
+	for _, c := range []*Client{tab1, tab2, other} {
+		h.register(c)
+		h.subscribe(1, c)
+	}
+	for _, c := range []*Client{tab1, tab2, other} {
+		drain(t, c)
+	}
+
+	h.MemberLeft(1, 1)
+
+	for _, tab := range []*Client{tab1, tab2} {
+		if got := drain(t, tab); len(got) != 1 || got[0] != typeRoomLeft {
+			t.Errorf("each tab must receive room.left, got %v", got)
+		}
+	}
+
+	h.broadcast(1, []byte("after leave"))
+	if len(tab1.send) != 0 || len(tab2.send) != 0 {
+		t.Error("user who left must not receive room messages")
+	}
+	if len(other.send) != 1 {
+		t.Error("other members must still receive room messages")
+	}
+}
+
+func TestHub_RoomDeleted(t *testing.T) {
+	h := NewHub()
+	a, b := newTestClient(1), newTestClient(2)
+	for _, c := range []*Client{a, b} {
+		h.register(c)
+		h.subscribe(1, c)
+	}
+	for _, c := range []*Client{a, b} {
+		drain(t, c)
+	}
+
+	h.RoomDeleted(1)
+
+	for _, c := range []*Client{a, b} {
+		if got := drain(t, c); len(got) != 1 || got[0] != typeRoomDeleted {
+			t.Errorf("expected room.deleted, got %v", got)
+		}
+		if len(c.rooms) != 0 {
+			t.Error("client must forget the deleted room")
+		}
+	}
+	if len(h.rooms) != 0 {
+		t.Errorf("deleted room must be removed from hub, got %d", len(h.rooms))
+	}
+}
+
 func TestHub_ConcurrentAccess(t *testing.T) {
 	h := NewHub()
 	var wg sync.WaitGroup
@@ -61,12 +194,13 @@ func TestHub_ConcurrentAccess(t *testing.T) {
 			h.register(c)
 			h.subscribe(1, c)
 			h.broadcast(1, []byte("x"))
+			_ = h.OnlineUsers()
 			h.unregister(c)
 		})
 	}
 	wg.Wait()
 
-	if len(h.clients) != 0 || len(h.rooms) != 0 {
-		t.Errorf("hub must be empty, got clients=%d rooms=%d", len(h.clients), len(h.rooms))
+	if len(h.clients) != 0 || len(h.rooms) != 0 || len(h.online) != 0 {
+		t.Errorf("hub must be empty, got clients=%d rooms=%d online=%d", len(h.clients), len(h.rooms), len(h.online))
 	}
 }

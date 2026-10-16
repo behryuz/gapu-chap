@@ -10,3 +10,8 @@ type User struct {
 	PasswordHash string
 	CreatedAt    time.Time
 }
+
+type OnlineUser struct {
+	ID       int64
+	Username string
+}

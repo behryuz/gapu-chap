@@ -58,7 +58,7 @@ func run() error {
 
 	authService := service.NewAuthService(userRepo, hasher, tokens)
 	userService := service.NewUserService(userRepo)
-	roomService := service.NewRoomService(roomRepo)
+	roomService := service.NewRoomService(roomRepo, hub)
 	messageService := service.NewMessageService(messageRepo, roomRepo, hub)
 
 	router := httptransport.NewRouter(httptransport.RouterDeps{
@@ -68,6 +68,7 @@ func run() error {
 		Users:    httptransport.NewUserHandler(userService),
 		Rooms:    httptransport.NewRoomHandler(roomService),
 		Messages: httptransport.NewMessageHandler(messageService),
+		Presence: httptransport.NewPresenceHandler(hub),
 		WS:       ws.NewServer(hub, tokens, messageService, roomService),
 	})
 

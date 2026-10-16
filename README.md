@@ -225,8 +225,9 @@ messages USING GIN (search_vector) -- полнотекстовый поиск
 |---|---|---|
 | `message.new` | `{ "id", "room_id", "author": {id, username}, "body", "created_at" }` | Новое сообщение |
 | `message.read` | `{ "room_id", "user_id", "message_id" }` | Кто-то прочитал |
-| `presence` | `{ "user_id", "username", "online": true }` | Пользователь появился/ушёл |
-| `room.deleted` | `{ "room_id" }` | Комната удалена владельцем |
+| `presence` | `{ "user_id", "username", "online": true }` | Пользователь появился/ушёл (рассылается всем подключённым) |
+| `room.left` | `{ "room_id" }` | Вы вышли из комнаты — подписка снята (во всех вкладках) |
+| `room.deleted` | `{ "room_id" }` | Комната удалена владельцем — подписка снята у всех |
 | `room.subscribed` | `{ "room_id" }` | Подтверждение подписки |
 | `error` | `{ "message": "..." }` | Ошибка обработки события |
 
@@ -262,6 +263,11 @@ messages USING GIN (search_vector) -- полнотекстовый поиск
   и `created_at`, история и real-time не расходятся.
 - Если канал `send` клиента переполнен (медленный клиент) — соединение закрывается
   (`StatusPolicyViolation`), чтобы не тормозить остальных.
+- **Presence**: Hub считает соединения на пользователя (`online map[userID]→{username, conns}`).
+  Событие `online: true` уходит при **первом** соединении, `online: false` — при закрытии
+  **последнего** (несколько вкладок = один «онлайн»). Список: `GET /api/users/online`.
+- **Выход/удаление комнаты** снимают WS-подписку: `RoomService` вызывает интерфейс
+  `RoomNotifier`, который реализует Hub (тот же приём, что и `MessagePublisher`).
 - Ping раз в 30 секунд для обнаружения «мёртвых» соединений.
 - При остановке сервера Hub закрывает все соединения со статусом `GoingAway`
   (`http.Server.RegisterOnShutdown`).
@@ -276,22 +282,22 @@ messages USING GIN (search_vector) -- полнотекстовый поиск
 cp .env.example .env
 docker compose up -d          # PostgreSQL
 make migrate-up               # применить миграции
-make run                      # запустить сервер на :8080
+make run                      # запустить сервер на :8081
 ```
 
 Переменные окружения:
 
 | Переменная | Пример | Описание |
 |---|---|---|
-| `HTTP_ADDR` | `:8080` | Адрес сервера |
-| `DATABASE_URL` | `postgres://chat:chat@localhost:5432/chat?sslmode=disable` | Подключение к БД |
+| `HTTP_ADDR` | `:8081` | Адрес сервера |
+| `DATABASE_URL` | `postgres://chat:chat@localhost:5434/chat?sslmode=disable` | Подключение к БД |
 | `JWT_SECRET` | `change-me` | Секрет для подписи токенов |
 | `JWT_TTL` | `24h` | Время жизни токена |
 
 Проверка WebSocket вручную:
 ```bash
 # brew install websocat
-websocat "ws://localhost:8080/ws?token=<TOKEN>"
+websocat "ws://localhost:8081/ws?token=<TOKEN>"
 {"type":"room.subscribe","payload":{"room_id":1}}
 {"type":"message.send","payload":{"room_id":1,"body":"Привет!"}}
 ```
@@ -300,13 +306,13 @@ websocat "ws://localhost:8080/ws?token=<TOKEN>"
 
 ## 7. План разработки (по шагам)
 
-- [ ] **Шаг 0.** Каркас: `go.mod`, структура папок, конфиг, `main.go`, `GET /health`, graceful shutdown
-- [ ] **Шаг 1.** Docker Compose + PostgreSQL + первая миграция (`users`)
-- [ ] **Шаг 2.** Регистрация и логин: bcrypt, JWT, `POST /register`, `POST /login`
-- [ ] **Шаг 3.** Auth middleware, `GET /api/me`, единый формат ошибок
-- [ ] **Шаг 4.** Комнаты: создание, список, join/leave, удаление только создателем
-- [ ] **Шаг 5.** Сообщения через REST: сохранение + история с курсорной пагинацией
-- [ ] **Шаг 6.** WebSocket: Hub, Client, подписка на комнату, `message.send` → `message.new`
+- [x] **Шаг 0.** Каркас: `go.mod`, структура папок, конфиг, `main.go`, `GET /health`, graceful shutdown
+- [x] **Шаг 1.** Docker Compose + PostgreSQL + первая миграция (`users`)
+- [x] **Шаг 2.** Регистрация и логин: bcrypt, JWT, `POST /register`, `POST /login`
+- [x] **Шаг 3.** Auth middleware, `GET /api/me`, единый формат ошибок
+- [x] **Шаг 4.** Комнаты: создание, список, join/leave, удаление только создателем
+- [x] **Шаг 5.** Сообщения через REST: сохранение + история с курсорной пагинацией
+- [x] **Шаг 6.** WebSocket: Hub, Client, подписка на комнату, `message.send` → `message.new`
 - [ ] **Шаг 7.** Статус «онлайн» (`presence`)
 - [ ] **Шаг 8.** Отметка «прочитано» и счётчик непрочитанных
 - [ ] **Шаг 9.** Личные сообщения (DM)

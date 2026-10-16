@@ -58,6 +58,10 @@ func (c *Client) sendEvent(eventType string, payload any) {
 		slog.Error("encode websocket event", "type", eventType, "error", err)
 		return
 	}
+	c.deliver(data)
+}
+
+func (c *Client) deliver(data []byte) {
 	if !c.enqueue(data) {
 		c.close(websocket.StatusPolicyViolation, "connection too slow")
 	}

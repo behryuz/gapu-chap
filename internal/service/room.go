@@ -20,12 +20,18 @@ type RoomRepository interface {
 	IsMember(ctx context.Context, roomID, userID int64) (bool, error)
 }
 
-type RoomService struct {
-	rooms RoomRepository
+type RoomNotifier interface {
+	MemberLeft(roomID, userID int64)
+	RoomDeleted(roomID int64)
 }
 
-func NewRoomService(rooms RoomRepository) *RoomService {
-	return &RoomService{rooms: rooms}
+type RoomService struct {
+	rooms    RoomRepository
+	notifier RoomNotifier
+}
+
+func NewRoomService(rooms RoomRepository, notifier RoomNotifier) *RoomService {
+	return &RoomService{rooms: rooms, notifier: notifier}
 }
 
 const maxRoomNameLength = 64
@@ -73,6 +79,8 @@ func (s *RoomService) Delete(ctx context.Context, roomID, actorID int64) error {
 	if err := s.rooms.Delete(ctx, roomID); err != nil {
 		return fmt.Errorf("delete room %d: %w", roomID, err)
 	}
+
+	s.notifier.RoomDeleted(roomID)
 	return nil
 }
 
@@ -99,6 +107,8 @@ func (s *RoomService) Leave(ctx context.Context, roomID, userID int64) error {
 	if err := s.rooms.RemoveMember(ctx, roomID, userID); err != nil {
 		return fmt.Errorf("remove member from room %d: %w", roomID, err)
 	}
+
+	s.notifier.MemberLeft(roomID, userID)
 	return nil
 }
 

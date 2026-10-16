@@ -24,6 +24,19 @@ func newFakeRoomRepo() *fakeRoomRepo {
 	}
 }
 
+type fakeRoomNotifier struct {
+	left    [][2]int64
+	deleted []int64
+}
+
+func (n *fakeRoomNotifier) MemberLeft(roomID, userID int64) {
+	n.left = append(n.left, [2]int64{roomID, userID})
+}
+
+func (n *fakeRoomNotifier) RoomDeleted(roomID int64) {
+	n.deleted = append(n.deleted, roomID)
+}
+
 func (r *fakeRoomRepo) IsMember(_ context.Context, roomID, userID int64) (bool, error) {
 	return r.isMember(roomID, userID), nil
 }
@@ -100,7 +113,7 @@ func setupRoom(t *testing.T) (*service.RoomService, *fakeRoomRepo, *domain.Room)
 	t.Helper()
 
 	repo := newFakeRoomRepo()
-	svc := service.NewRoomService(repo)
+	svc := service.NewRoomService(repo, &fakeRoomNotifier{})
 
 	room, err := svc.Create(t.Context(), ownerID, "general")
 	if err != nil {
@@ -111,7 +124,7 @@ func setupRoom(t *testing.T) (*service.RoomService, *fakeRoomRepo, *domain.Room)
 
 func TestRoomCreate_Success(t *testing.T) {
 	repo := newFakeRoomRepo()
-	svc := service.NewRoomService(repo)
+	svc := service.NewRoomService(repo, &fakeRoomNotifier{})
 
 	room, err := svc.Create(t.Context(), ownerID, "  general  ")
 	if err != nil {
@@ -140,7 +153,7 @@ func TestRoomCreate_Validation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			svc := service.NewRoomService(newFakeRoomRepo())
+			svc := service.NewRoomService(newFakeRoomRepo(), &fakeRoomNotifier{})
 
 			_, err := svc.Create(t.Context(), ownerID, tt.roomName)
 			if !errors.Is(err, domain.ErrValidation) {
@@ -207,7 +220,7 @@ func TestRoomJoinAndLeave(t *testing.T) {
 }
 
 func TestRoomJoin_NotFound(t *testing.T) {
-	svc := service.NewRoomService(newFakeRoomRepo())
+	svc := service.NewRoomService(newFakeRoomRepo(), &fakeRoomNotifier{})
 
 	err := svc.Join(t.Context(), 999, otherUserID)
 	if !errors.Is(err, domain.ErrNotFound) {
@@ -224,5 +237,47 @@ func TestRoomLeave_OwnerForbidden(t *testing.T) {
 	}
 	if !repo.isMember(room.ID, ownerID) {
 		t.Error("owner must remain a member")
+	}
+}
+
+func TestRoom_NotifiesHubOnLeaveAndDelete(t *testing.T) {
+	repo := newFakeRoomRepo()
+	notifier := &fakeRoomNotifier{}
+	svc := service.NewRoomService(repo, notifier)
+
+	room, err := svc.Create(t.Context(), ownerID, "general")
+	if err != nil {
+		t.Fatalf("create room: %v", err)
+	}
+	if err := svc.Join(t.Context(), room.ID, otherUserID); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+
+	if err := svc.Leave(t.Context(), room.ID, ownerID); err == nil {
+		t.Fatal("owner must not be able to leave")
+	}
+	if len(notifier.left) != 0 {
+		t.Fatalf("failed leave must not notify, got %v", notifier.left)
+	}
+
+	if err := svc.Leave(t.Context(), room.ID, otherUserID); err != nil {
+		t.Fatalf("leave: %v", err)
+	}
+	if len(notifier.left) != 1 || notifier.left[0] != [2]int64{room.ID, otherUserID} {
+		t.Errorf("expected MemberLeft(%d, %d), got %v", room.ID, otherUserID, notifier.left)
+	}
+
+	if err := svc.Delete(t.Context(), room.ID, otherUserID); err == nil {
+		t.Fatal("non-owner must not be able to delete")
+	}
+	if len(notifier.deleted) != 0 {
+		t.Fatalf("failed delete must not notify, got %v", notifier.deleted)
+	}
+
+	if err := svc.Delete(t.Context(), room.ID, ownerID); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+	if len(notifier.deleted) != 1 || notifier.deleted[0] != room.ID {
+		t.Errorf("expected RoomDeleted(%d), got %v", room.ID, notifier.deleted)
 	}
 }
