@@ -127,7 +127,7 @@ func (r *RoomRepository) RemoveMember(ctx context.Context, roomID, userID int64)
 
 func (r *RoomRepository) ListMembers(ctx context.Context, roomID int64) ([]domain.Member, error) {
 	const query = `
-		SELECT u.id, u.username, u.first_name, u.last_name, m.joined_at
+		SELECT u.id, u.username, u.first_name, u.last_name, m.joined_at, m.last_read_message_id
 		FROM room_members m 
 		JOIN users u ON u.id = m.user_id
 		WHERE m.room_id = $1
@@ -140,7 +140,7 @@ func (r *RoomRepository) ListMembers(ctx context.Context, roomID int64) ([]domai
 
 	members, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.Member, error) {
 		var m domain.Member
-		err := row.Scan(&m.UserID, &m.Username, &m.FirstName, &m.LastName, &m.JoinedAt)
+		err := row.Scan(&m.UserID, &m.Username, &m.FirstName, &m.LastName, &m.JoinedAt, &m.LastReadMessageID)
 		return m, err
 	})
 	if err != nil {
@@ -160,4 +160,46 @@ func (r *RoomRepository) IsMember(ctx context.Context, roomID, userID int64) (bo
 		return false, fmt.Errorf("check room membership: %w", err)
 	}
 	return isMember, nil
+}
+
+func (r *RoomRepository) MarkRead(ctx context.Context, roomID, userID, messageID int64) (bool, error) {
+	const query = `
+		UPDATE room_members
+		SET last_read_message_id = $3
+		WHERE room_id = $1 AND user_id = $2 AND last_read_message_id < $3`
+
+	tag, err := r.pool.Exec(ctx, query, roomID, userID, messageID)
+	if err != nil {
+		return false, fmt.Errorf("update last read message: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+func (r *RoomRepository) ListForUser(ctx context.Context, userID int64) ([]domain.UserRoom, error) {
+	const query = `
+                SELECT r.id, r.name, r.owner_id, r.created_at, rm.last_read_message_id,
+                       (SELECT count(*)
+                        FROM messages m
+                        WHERE m.room_id = r.id
+                          AND m.id > rm.last_read_message_id
+                          AND m.author_id <> rm.user_id) AS unread_count
+                FROM room_members rm
+                JOIN rooms r ON r.id = rm.room_id
+                WHERE rm.user_id = $1
+                ORDER BY r.id DESC`
+
+	rows, err := r.pool.Query(ctx, query, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list user rooms: %w", err)
+	}
+
+	rooms, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.UserRoom, error) {
+		var ur domain.UserRoom
+		err := row.Scan(&ur.ID, &ur.Name, &ur.OwnerID, &ur.CreatedAt, &ur.LastReadMessageID, &ur.UnreadCount)
+		return ur, err
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan user rooms: %w", err)
+	}
+	return rooms, nil
 }

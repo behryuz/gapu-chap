@@ -18,6 +18,7 @@ type RoomRepository interface {
 	RemoveMember(ctx context.Context, roomID, userID int64) error
 	ListMembers(ctx context.Context, roomID int64) ([]domain.Member, error)
 	IsMember(ctx context.Context, roomID, userID int64) (bool, error)
+	ListForUser(ctx context.Context, userID int64) ([]domain.UserRoom, error)
 }
 
 type RoomNotifier interface {
@@ -122,6 +123,14 @@ func (s *RoomService) Members(ctx context.Context, roomID int64) ([]domain.Membe
 		return nil, fmt.Errorf("list members of room %d: %w", roomID, err)
 	}
 	return members, nil
+}
+
+func (s *RoomService) MyRooms(ctx context.Context, userID int64) ([]domain.UserRoom, error) {
+	rooms, err := s.rooms.ListForUser(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list rooms for user %d: %w", userID, err)
+	}
+	return rooms, nil
 }
 
 func (s *RoomService) RequireMember(ctx context.Context, roomID, userID int64) error {

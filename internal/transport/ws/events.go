@@ -12,6 +12,7 @@ const (
 	typeRoomSubscribe   = "room.subscribe"
 	typeRoomUnsubscribe = "room.unsubscribe"
 	typeMessageSend     = "message.send"
+	typeMessageRead     = "message.read"
 )
 
 const (
@@ -46,6 +47,17 @@ type presencePayload struct {
 	UserID   int64  `json:"user_id"`
 	Username string `json:"username"`
 	Online   bool   `json:"online"`
+}
+
+type markReadPayload struct {
+	RoomID    int64 `json:"room_id"`
+	MessageID int64 `json:"message_id"`
+}
+
+type readPayload struct {
+	RoomID    int64 `json:"room_id"`
+	UserID    int64 `json:"user_id"`
+	MessageID int64 `json:"message_id"`
 }
 
 type errorPayload struct {

@@ -38,6 +38,7 @@ func NewRouter(d RouterDeps) http.Handler {
 
 	// protected
 	protected("GET /api/me", d.Users.Me)
+	protected("GET /api/me/rooms", d.Rooms.MyRooms)
 	protected("GET /api/users/online", d.Presence.Online)
 
 	protected("POST /api/rooms", d.Rooms.Create)
@@ -49,6 +50,7 @@ func NewRouter(d RouterDeps) http.Handler {
 	protected("GET /api/rooms/{id}/members", d.Rooms.Members)
 	protected("POST /api/rooms/{id}/messages", d.Messages.Send)
 	protected("GET /api/rooms/{id}/messages", d.Messages.History)
+	protected("POST /api/rooms/{id}/read", d.Messages.MarkRead)
 
 	return logRequest(recoverPanic(mux))
 }

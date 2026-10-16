@@ -59,7 +59,7 @@ func run() error {
 	authService := service.NewAuthService(userRepo, hasher, tokens)
 	userService := service.NewUserService(userRepo)
 	roomService := service.NewRoomService(roomRepo, hub)
-	messageService := service.NewMessageService(messageRepo, roomRepo, hub)
+	messageService := service.NewMessageService(messageRepo, roomRepo, roomRepo, hub)
 
 	router := httptransport.NewRouter(httptransport.RouterDeps{
 		DB:       pool,

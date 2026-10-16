@@ -10,3 +10,9 @@ type Message struct {
 	Body           string
 	CreatedAt      time.Time
 }
+
+type ReadReceipt struct {
+	RoomID    int64
+	UserID    int64
+	MessageID int64
+}

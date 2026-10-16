@@ -72,3 +72,13 @@ func (r *MessageRepository) ListByRoom(ctx context.Context, roomID, beforeID int
 	}
 	return messages, nil
 }
+
+func (r *MessageRepository) ExistsInRoom(ctx context.Context, roomID, messageID int64) (bool, error) {
+	const query = `SELECT EXISTS (SELECT 1 FROM messages WHERE id = $1 AND room_id = $2)`
+
+	var exists bool
+	if err := r.pool.QueryRow(ctx, query, messageID, roomID).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check if messages exists: %w", err)
+	}
+	return exists, nil
+}

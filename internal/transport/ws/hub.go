@@ -122,6 +122,15 @@ func (h *Hub) PublishMessage(msg *domain.Message) {
 	h.broadcast(msg.RoomID, data)
 }
 
+func (h *Hub) PublishRead(r domain.ReadReceipt) {
+	data, err := encodeEvent(typeMessageRead, readPayload{RoomID: r.RoomID, UserID: r.UserID, MessageID: r.MessageID})
+	if err != nil {
+		slog.Error("encode websocket event", "type", typeMessageRead, "error", err)
+		return
+	}
+	h.broadcast(r.RoomID, data)
+}
+
 func (h *Hub) MemberLeft(roomID, userID int64) {
 	data, err := encodeEvent(typeRoomLeft, roomPayload{RoomID: roomID})
 	if err != nil {

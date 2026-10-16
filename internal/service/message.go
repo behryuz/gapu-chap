@@ -12,24 +12,36 @@ import (
 type MessageRepository interface {
 	Create(ctx context.Context, msg *domain.Message) error
 	ListByRoom(ctx context.Context, roomID, beforeID int64, limit int) ([]domain.Message, error)
+	ExistsInRoom(ctx context.Context, roomID, messageID int64) (bool, error)
 }
 
 type MembershipChecker interface {
 	IsMember(ctx context.Context, roomID, userID int64) (bool, error)
 }
 
+type ReadMarker interface {
+	MarkRead(ctx context.Context, roomID, userID, messageID int64) (bool, error)
+}
+
 type MessagePublisher interface {
 	PublishMessage(msg *domain.Message)
+	PublishRead(receipt domain.ReadReceipt)
 }
 
 type MessageService struct {
 	messages  MessageRepository
 	members   MembershipChecker
+	reads     ReadMarker
 	publisher MessagePublisher
 }
 
-func NewMessageService(messages MessageRepository, members MembershipChecker, publisher MessagePublisher) *MessageService {
-	return &MessageService{messages: messages, members: members, publisher: publisher}
+func NewMessageService(
+	messages MessageRepository,
+	members MembershipChecker,
+	reads ReadMarker,
+	publisher MessagePublisher,
+) *MessageService {
+	return &MessageService{messages: messages, members: members, reads: reads, publisher: publisher}
 }
 
 const (
@@ -77,6 +89,33 @@ func (s *MessageService) History(ctx context.Context, roomID, userID int64, q Hi
 		return nil, fmt.Errorf("list messages in room %d: %w", roomID, err)
 	}
 	return messages, nil
+}
+
+func (s *MessageService) MarkRead(ctx context.Context, roomID, userID, messageID int64) error {
+	if messageID <= 0 {
+		return fmt.Errorf("%w: message_id must be positive", domain.ErrValidation)
+	}
+
+	if err := s.ensureMember(ctx, roomID, userID); err != nil {
+		return err
+	}
+
+	exists, err := s.messages.ExistsInRoom(ctx, roomID, messageID)
+	if err != nil {
+		return fmt.Errorf("check messages %d in room %d: %w", messageID, roomID, err)
+	}
+	if !exists {
+		return fmt.Errorf("%w: message %d in room %d", domain.ErrNotFound, messageID, roomID)
+	}
+
+	advanced, err := s.reads.MarkRead(ctx, roomID, userID, messageID)
+	if err != nil {
+		return fmt.Errorf("mark read: %w", err)
+	}
+	if advanced {
+		s.publisher.PublishRead(domain.ReadReceipt{RoomID: roomID, UserID: userID, MessageID: messageID})
+	}
+	return nil
 }
 
 func (s *MessageService) ensureMember(ctx context.Context, roomID, userID int64) error {

@@ -37,6 +37,16 @@ func (n *fakeRoomNotifier) RoomDeleted(roomID int64) {
 	n.deleted = append(n.deleted, roomID)
 }
 
+func (r *fakeRoomRepo) ListForUser(_ context.Context, userID int64) ([]domain.UserRoom, error) {
+	var result []domain.UserRoom
+	for roomID, members := range r.members {
+		if members[userID] {
+			result = append(result, domain.UserRoom{Room: *r.rooms[roomID]})
+		}
+	}
+	return result, nil
+}
+
 func (r *fakeRoomRepo) IsMember(_ context.Context, roomID, userID int64) (bool, error) {
 	return r.isMember(roomID, userID), nil
 }

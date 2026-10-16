@@ -38,6 +38,28 @@ func (r *fakeMessageRepo) ListByRoom(_ context.Context, roomID, beforeID int64, 
 	return result, nil
 }
 
+func (r *fakeMessageRepo) ExistsInRoom(_ context.Context, roomID, messageID int64) (bool, error) {
+	for _, m := range r.messages {
+		if m.ID == messageID && m.RoomID == roomID {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// fakeReads хранит last_read_message_id для пар (roomID, userID)
+// и, как SQL-запрос, двигает отметку только вперёд.
+type fakeReads map[[2]int64]int64
+
+func (f fakeReads) MarkRead(_ context.Context, roomID, userID, messageID int64) (bool, error) {
+	key := [2]int64{roomID, userID}
+	if f[key] >= messageID {
+		return false, nil
+	}
+	f[key] = messageID
+	return true, nil
+}
+
 // fakeMembership: множество пар (roomID, userID).
 type fakeMembership map[[2]int64]bool
 
@@ -53,6 +75,11 @@ const (
 
 type fakePublisher struct {
 	published []domain.Message
+	reads     []domain.ReadReceipt
+}
+
+func (p *fakePublisher) PublishRead(receipt domain.ReadReceipt) {
+	p.reads = append(p.reads, receipt)
 }
 
 func (p *fakePublisher) PublishMessage(msg *domain.Message) {
@@ -63,7 +90,7 @@ func newTestMessageService() (*service.MessageService, *fakeMessageRepo, *fakePu
 	repo := &fakeMessageRepo{}
 	members := fakeMembership{{testRoomID, memberID}: true}
 	pub := &fakePublisher{}
-	return service.NewMessageService(repo, members, pub), repo, pub
+	return service.NewMessageService(repo, members, fakeReads{}, pub), repo, pub
 }
 
 func TestSend_Success(t *testing.T) {
@@ -204,4 +231,65 @@ func ids(messages []domain.Message) []int64 {
 		result[i] = m.ID
 	}
 	return result
+}
+
+func TestMarkRead(t *testing.T) {
+	svc, _, pub := newTestMessageService()
+	var ids []int64
+	for range 3 {
+		msg, err := svc.Send(t.Context(), testRoomID, memberID, "msg")
+		if err != nil {
+			t.Fatalf("send: %v", err)
+		}
+		ids = append(ids, msg.ID)
+	}
+
+	if err := svc.MarkRead(t.Context(), testRoomID, memberID, ids[1]); err != nil {
+		t.Fatalf("mark read: %v", err)
+	}
+	want := domain.ReadReceipt{RoomID: testRoomID, UserID: memberID, MessageID: ids[1]}
+	if len(pub.reads) != 1 || pub.reads[0] != want {
+		t.Fatalf("expected receipt %+v to be published, got %+v", want, pub.reads)
+	}
+
+	// Повтор и шаг назад не меняют отметку и не порождают событий.
+	for _, id := range []int64{ids[1], ids[0]} {
+		if err := svc.MarkRead(t.Context(), testRoomID, memberID, id); err != nil {
+			t.Fatalf("mark read %d: %v", id, err)
+		}
+	}
+	if len(pub.reads) != 1 {
+		t.Errorf("read marker must not move backwards, got %d events", len(pub.reads))
+	}
+}
+
+func TestMarkRead_Errors(t *testing.T) {
+	svc, _, pub := newTestMessageService()
+	msg, err := svc.Send(t.Context(), testRoomID, memberID, "msg")
+	if err != nil {
+		t.Fatalf("send: %v", err)
+	}
+
+	tests := []struct {
+		name      string
+		userID    int64
+		messageID int64
+		wantErr   error
+	}{
+		{"zero message id", memberID, 0, domain.ErrValidation},
+		{"not a member", strangerID, msg.ID, domain.ErrForbidden},
+		{"message not in room", memberID, 999, domain.ErrNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := svc.MarkRead(t.Context(), testRoomID, tt.userID, tt.messageID)
+			if !errors.Is(err, tt.wantErr) {
+				t.Fatalf("expected %v, got %v", tt.wantErr, err)
+			}
+		})
+	}
+	if len(pub.reads) != 0 {
+		t.Errorf("failed mark read must not publish, got %+v", pub.reads)
+	}
 }

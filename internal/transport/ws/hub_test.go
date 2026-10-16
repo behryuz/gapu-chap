@@ -4,6 +4,8 @@ import (
 	"encoding/json"
 	"sync"
 	"testing"
+
+	"gapu-chap/internal/domain"
 )
 
 // Клиент без реального соединения. Буфер большой, чтобы в тестах
@@ -202,5 +204,29 @@ func TestHub_ConcurrentAccess(t *testing.T) {
 
 	if len(h.clients) != 0 || len(h.rooms) != 0 || len(h.online) != 0 {
 		t.Errorf("hub must be empty, got clients=%d rooms=%d online=%d", len(h.clients), len(h.rooms), len(h.online))
+	}
+}
+
+func TestHub_PublishRead(t *testing.T) {
+	h := NewHub()
+	reader, other, outsider := newTestClient(1), newTestClient(2), newTestClient(3)
+	for _, c := range []*Client{reader, other, outsider} {
+		h.register(c)
+	}
+	h.subscribe(1, reader)
+	h.subscribe(1, other)
+	for _, c := range []*Client{reader, other, outsider} {
+		drain(t, c)
+	}
+
+	h.PublishRead(domain.ReadReceipt{RoomID: 1, UserID: 1, MessageID: 42})
+
+	for _, c := range []*Client{reader, other} {
+		if got := drain(t, c); len(got) != 1 || got[0] != typeMessageRead {
+			t.Errorf("room subscriber must receive message.read, got %v", got)
+		}
+	}
+	if got := drain(t, outsider); len(got) != 0 {
+		t.Errorf("non-subscriber must not receive message.read, got %v", got)
 	}
 }

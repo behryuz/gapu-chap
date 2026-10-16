@@ -20,8 +20,9 @@ type TokenParser interface {
 	Parse(token string) (*auth.Claims, error)
 }
 
-type MessageSender interface {
+type MessageService interface {
 	Send(ctx context.Context, roomID, authorID int64, body string) (*domain.Message, error)
+	MarkRead(ctx context.Context, roomID, userID, messageID int64) error
 }
 
 type RoomAccess interface {
@@ -33,11 +34,11 @@ const eventTimeout = 5 * time.Second
 type Server struct {
 	hub      *Hub
 	tokens   TokenParser
-	messages MessageSender
+	messages MessageService
 	rooms    RoomAccess
 }
 
-func NewServer(hub *Hub, tokens TokenParser, messages MessageSender, rooms RoomAccess) *Server {
+func NewServer(hub *Hub, tokens TokenParser, messages MessageService, rooms RoomAccess) *Server {
 	return &Server{hub: hub, tokens: tokens, messages: messages, rooms: rooms}
 }
 
@@ -106,6 +107,8 @@ func (s *Server) dispatch(ctx context.Context, c *Client, event inboundEvent) {
 		s.handleUnsubscribe(c, event.Payload)
 	case typeMessageSend:
 		s.handleSend(ctx, c, event.Payload)
+	case typeMessageRead:
+		s.handleRead(ctx, c, event.Payload)
 	default:
 		c.sendError(fmt.Sprintf("unknown event type %q", event.Type))
 	}
@@ -144,6 +147,18 @@ func (s *Server) handleSend(ctx context.Context, c *Client, raw json.RawMessage)
 	}
 
 	if _, err := s.messages.Send(ctx, p.RoomID, c.userID, p.Body); err != nil {
+		c.sendError(publicError(err))
+	}
+}
+
+func (s *Server) handleRead(ctx context.Context, c *Client, raw json.RawMessage) {
+	var p markReadPayload
+	if err := decodePayload(raw, &p); err != nil || p.RoomID <= 0 {
+		c.sendError("invalid payload")
+		return
+	}
+
+	if err := s.messages.MarkRead(ctx, p.RoomID, c.userID, p.MessageID); err != nil {
 		c.sendError(publicError(err))
 	}
 }

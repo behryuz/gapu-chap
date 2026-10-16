@@ -12,6 +12,7 @@ import (
 type MessageService interface {
 	Send(ctx context.Context, roomID, authorID int64, body string) (*domain.Message, error)
 	History(ctx context.Context, roomID, userID int64, q service.HistoryQuery) ([]domain.Message, error)
+	MarkRead(ctx context.Context, roomID, userID, messageID int64) error
 }
 
 type MessageHandler struct {
@@ -24,6 +25,10 @@ func NewMessageHandler(messages MessageService) *MessageHandler {
 
 type sendMessageRequest struct {
 	Body string `json:"body"`
+}
+
+type markReadRequest struct {
+	MessageID int64 `json:"message_id"`
 }
 
 type authorResponse struct {
@@ -124,4 +129,30 @@ func (h *MessageHandler) History(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *MessageHandler) MarkRead(w http.ResponseWriter, r *http.Request) {
+	authUser, ok := authUserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	roomID, err := pathID(r, "id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	var req markReadRequest
+	if err := decodeJSON(w, r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if err := h.messages.MarkRead(r.Context(), roomID, authUser.ID, req.MessageID); err != nil {
+		writeServiceError(w, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }

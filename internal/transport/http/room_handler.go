@@ -17,6 +17,7 @@ type RoomService interface {
 	Join(ctx context.Context, roomID, userID int64) error
 	Leave(ctx context.Context, roomID, userID int64) error
 	Members(ctx context.Context, roomID int64) ([]domain.Member, error)
+	MyRooms(ctx context.Context, userID int64) ([]domain.UserRoom, error)
 }
 
 type RoomHandler struct {
@@ -42,12 +43,23 @@ type roomListResponse struct {
 	Rooms []roomResponse `json:"rooms"`
 }
 
+type userRoomResponse struct {
+	roomResponse
+	LastReadMessageID int64 `json:"last_read_message_id"`
+	UnreadCount       int64 `json:"unread_count"`
+}
+
+type userRoomListResponse struct {
+	Rooms []userRoomResponse `json:"rooms"`
+}
+
 type memberResponse struct {
-	UserID    int64     `json:"user_id"`
-	Username  string    `json:"username"`
-	FirstName string    `json:"first_name"`
-	LastName  string    `json:"last_name,omitempty"`
-	JoinedAt  time.Time `json:"joined_at"`
+	UserID            int64     `json:"user_id"`
+	Username          string    `json:"username"`
+	FirstName         string    `json:"first_name"`
+	LastName          string    `json:"last_name,omitempty"`
+	JoinedAt          time.Time `json:"joined_at"`
+	LastReadMessageID int64     `json:"last_read_message_id"`
 }
 
 type memberListResponse struct {
@@ -188,11 +200,36 @@ func (h *RoomHandler) Members(w http.ResponseWriter, r *http.Request) {
 	resp := memberListResponse{Members: make([]memberResponse, 0, len(members))}
 	for _, m := range members {
 		resp.Members = append(resp.Members, memberResponse{
-			UserID:    m.UserID,
-			Username:  m.Username,
-			FirstName: m.FirstName,
-			LastName:  m.LastName,
-			JoinedAt:  m.JoinedAt,
+			UserID:            m.UserID,
+			Username:          m.Username,
+			FirstName:         m.FirstName,
+			LastName:          m.LastName,
+			JoinedAt:          m.JoinedAt,
+			LastReadMessageID: m.LastReadMessageID,
+		})
+	}
+	writeJSON(w, http.StatusOK, resp)
+}
+
+func (h *RoomHandler) MyRooms(w http.ResponseWriter, r *http.Request) {
+	authUser, ok := authUserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	rooms, err := h.rooms.MyRooms(r.Context(), authUser.ID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	resp := userRoomListResponse{Rooms: make([]userRoomResponse, 0, len(rooms))}
+	for i := range rooms {
+		resp.Rooms = append(resp.Rooms, userRoomResponse{
+			roomResponse:      toRoomResponse(&rooms[i].Room),
+			LastReadMessageID: rooms[i].LastReadMessageID,
+			UnreadCount:       rooms[i].UnreadCount,
 		})
 	}
 	writeJSON(w, http.StatusOK, resp)
