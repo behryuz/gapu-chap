@@ -8,4 +8,5 @@ var (
 	ErrValidation         = errors.New("validation failed")
 	ErrInvalidCredentials = errors.New("invalid username or password")
 	ErrForbidden          = errors.New("forbidden")
+	ErrBanned             = errors.New("user is banned")
 )

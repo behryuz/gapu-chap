@@ -14,4 +14,4 @@ CREATE INDEX messages_room_id_id_idx ON messages (room_id, id DESC);
 CREATE INDEX messages_author_id_idx ON messages (author_id);
 
 -- +goose Down
-DROP TABLE messages
+DROP TABLE messages;

@@ -13,6 +13,7 @@ type MessageRepository interface {
 	Create(ctx context.Context, msg *domain.Message) error
 	ListByRoom(ctx context.Context, roomID, beforeID int64, limit int) ([]domain.Message, error)
 	ExistsInRoom(ctx context.Context, roomID, messageID int64) (bool, error)
+	Search(ctx context.Context, roomID int64, tsquery string, beforeID int64, limit int) ([]domain.Message, error)
 }
 
 type MembershipChecker interface {
@@ -74,19 +75,39 @@ type HistoryQuery struct {
 	Limit    int
 }
 
+func (q HistoryQuery) limit() int {
+	if q.Limit <= 0 {
+		return defaultHistoryLimit
+	}
+	return min(q.Limit, maxHistoryLimit)
+}
+
 func (s *MessageService) History(ctx context.Context, roomID, userID int64, q HistoryQuery) ([]domain.Message, error) {
 	if err := s.ensureMember(ctx, roomID, userID); err != nil {
 		return nil, err
 	}
 
-	if q.Limit <= 0 {
-		q.Limit = defaultHistoryLimit
-	}
-	q.Limit = min(q.Limit, maxHistoryLimit)
-
-	messages, err := s.messages.ListByRoom(ctx, roomID, q.BeforeID, q.Limit)
+	messages, err := s.messages.ListByRoom(ctx, roomID, q.BeforeID, q.limit())
 	if err != nil {
 		return nil, fmt.Errorf("list messages in room %d: %w", roomID, err)
+	}
+	return messages, nil
+}
+
+// Search — поиск по истории комнаты. Те же права, что у истории (только участники),
+// и та же курсорная пагинация: результаты от новых к старым.
+func (s *MessageService) Search(ctx context.Context, roomID, userID int64, query string, q HistoryQuery) ([]domain.Message, error) {
+	tsquery, err := buildSearchQuery(query)
+	if err != nil {
+		return nil, err
+	}
+	if err := s.ensureMember(ctx, roomID, userID); err != nil {
+		return nil, err
+	}
+
+	messages, err := s.messages.Search(ctx, roomID, tsquery, q.BeforeID, q.limit())
+	if err != nil {
+		return nil, fmt.Errorf("search messages in room %d: %w", roomID, err)
 	}
 	return messages, nil
 }

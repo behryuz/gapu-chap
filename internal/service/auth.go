@@ -103,6 +103,10 @@ func (s *AuthService) Login(ctx context.Context, username, password string) (str
 		return "", domain.ErrInvalidCredentials
 	}
 
+	if user.IsBanned() {
+		return "", domain.ErrBanned
+	}
+
 	token, err := s.tokens.Issue(user.ID, user.Username)
 	if err != nil {
 		return "", fmt.Errorf("issue token: %w", err)

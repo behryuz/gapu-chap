@@ -11,12 +11,9 @@ import (
 	"syscall"
 	"time"
 
-	"gapu-chap/internal/auth"
+	"gapu-chap/internal/app"
 	"gapu-chap/internal/config"
 	"gapu-chap/internal/repository/postgres"
-	"gapu-chap/internal/service"
-	httptransport "gapu-chap/internal/transport/http"
-	"gapu-chap/internal/transport/ws"
 
 	"golang.org/x/crypto/bcrypt"
 )
@@ -47,37 +44,25 @@ func run() error {
 	defer pool.Close()
 	slog.Info("database connection established")
 
-	userRepo := postgres.NewUserRepository(pool)
-	roomRepo := postgres.NewRoomRepository(pool)
-	messageRepo := postgres.NewMessageRepository(pool)
+	if cfg.MigrateOnStart {
+		if err := postgres.Migrate(ctx, cfg.DatabaseURL); err != nil {
+			return fmt.Errorf("migrate database: %w", err)
+		}
+		slog.Info("database migrations applied")
+	}
 
-	hasher := auth.NewBcryptHasher(bcrypt.DefaultCost)
-	tokens := auth.NewTokenManager(cfg.JWTSecret, cfg.JWTTTL)
-
-	hub := ws.NewHub()
-
-	authService := service.NewAuthService(userRepo, hasher, tokens)
-	userService := service.NewUserService(userRepo)
-	roomService := service.NewRoomService(roomRepo, hub)
-	messageService := service.NewMessageService(messageRepo, roomRepo, roomRepo, hub)
-
-	router := httptransport.NewRouter(httptransport.RouterDeps{
-		DB:       pool,
-		Tokens:   tokens,
-		Auth:     httptransport.NewAuthHandler(authService),
-		Users:    httptransport.NewUserHandler(userService),
-		Rooms:    httptransport.NewRoomHandler(roomService),
-		Messages: httptransport.NewMessageHandler(messageService),
-		Presence: httptransport.NewPresenceHandler(hub),
-		WS:       ws.NewServer(hub, tokens, messageService, roomService),
+	application := app.New(pool, app.Config{
+		JWTSecret:  cfg.JWTSecret,
+		JWTTTL:     cfg.JWTTTL,
+		BcryptCost: bcrypt.DefaultCost,
 	})
 
 	srv := &http.Server{
 		Addr:              cfg.HTTPAddr,
-		Handler:           router,
+		Handler:           application.Handler,
 		ReadHeaderTimeout: 5 * time.Second,
 	}
-	srv.RegisterOnShutdown(hub.CloseAll)
+	srv.RegisterOnShutdown(application.Hub.CloseAll)
 
 	serverErr := make(chan error, 1)
 	go func() {

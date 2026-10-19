@@ -16,5 +16,31 @@ services:
       timeout: 3s
       retries: 5
 
+  # Сервисы ниже стартуют только с профилем app: `make up` (или docker compose --profile app up).
+  # Обычный `docker compose up -d` по-прежнему поднимает одну базу для локальной разработки.
+  app:
+    build: .
+    container_name: gapu-chap-app
+    profiles: ["app"]
+    environment:
+      DATABASE_URL: postgres://chat:chat@postgres:5432/chat?sslmode=disable
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env}
+      JWT_TTL: ${JWT_TTL:-24h}
+      MIGRATE_ON_START: "true"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build: ../gapu-chap-front
+    container_name: gapu-chap-web
+    profiles: ["app"]
+    ports:
+      - "8080:80"
+    depends_on:
+      - app
+    restart: unless-stopped
+
 volumes:
   pgdata:

@@ -1,6 +1,8 @@
 package http
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"runtime/debug"
@@ -8,13 +10,21 @@ import (
 	"time"
 
 	"gapu-chap/internal/auth"
+	"gapu-chap/internal/domain"
 )
 
 type TokenParser interface {
 	Parse(token string) (*auth.Claims, error)
 }
 
-func requireAuth(tokens TokenParser) func(http.Handler) http.Handler {
+type AccountLoader interface {
+	GetByID(ctx context.Context, id int64) (*domain.User, error)
+}
+
+// requireAuth проверяет подпись и срок токена, а затем — сам аккаунт в базе.
+// Один быстрый запрос по первичному ключу на каждый запрос — цена того, что бан
+// и снятие роли модератора действуют сразу, а не когда истечёт токен.
+func requireAuth(tokens TokenParser, accounts AccountLoader) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			raw, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer ")
@@ -29,9 +39,23 @@ func requireAuth(tokens TokenParser) func(http.Handler) http.Handler {
 				return
 			}
 
+			account, err := accounts.GetByID(r.Context(), claims.UserID)
+			switch {
+			case errors.Is(err, domain.ErrNotFound):
+				unauthorized(w, "account not found")
+				return
+			case err != nil:
+				writeServiceError(w, err)
+				return
+			case account.IsBanned():
+				writeError(w, http.StatusForbidden, domain.ErrBanned.Error())
+				return
+			}
+
 			ctx := withAuthUser(r.Context(), AuthUser{
-				ID:       claims.UserID,
-				Username: claims.Username,
+				ID:       account.ID,
+				Username: account.Username,
+				Role:     account.Role,
 			})
 			next.ServeHTTP(w, r.WithContext(ctx))
 		})

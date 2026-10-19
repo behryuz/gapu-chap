@@ -82,3 +82,32 @@ func (r *MessageRepository) ExistsInRoom(ctx context.Context, roomID, messageID 
 	}
 	return exists, nil
 }
+
+func (r *MessageRepository) Search(ctx context.Context, roomID int64, tsquery string, beforeID int64, limit int) ([]domain.Message, error) {
+	if beforeID <= 0 {
+		beforeID = math.MaxInt64
+	}
+
+	const query = `
+		SELECT m.id, m.room_id, m.author_id, u.username, m.body, m.created_at
+		FROM messages m
+		JOIN users u ON u.id = m.author_id
+		WHERE m.room_id = $1
+		  AND m.search_vector @@ to_tsquery('simple', $2)
+		  AND m.id < $3
+		ORDER BY m.id DESC
+		LIMIT $4`
+
+	rows, err := r.pool.Query(ctx, query, roomID, tsquery, beforeID, limit)
+	if err != nil {
+		return nil, fmt.Errorf("search messages: %w", err)
+	}
+
+	messages, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (domain.Message, error) {
+		return scanMessage(row)
+	})
+	if err != nil {
+		return nil, fmt.Errorf("scan messages: %w", err)
+	}
+	return messages, nil
+}

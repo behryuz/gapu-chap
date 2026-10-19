@@ -60,6 +60,29 @@ func (f fakeReads) MarkRead(_ context.Context, roomID, userID, messageID int64) 
 	return true, nil
 }
 
+// Search в фейке — грубое приближение full-text: все слова tsquery входят в текст.
+func (r *fakeMessageRepo) Search(_ context.Context, roomID int64, tsquery string, beforeID int64, limit int) ([]domain.Message, error) {
+	var terms []string
+	for _, term := range strings.Split(tsquery, " & ") {
+		terms = append(terms, strings.TrimSuffix(term, ":*"))
+	}
+
+	var result []domain.Message
+	for _, m := range slices.Backward(r.messages) {
+		if m.RoomID != roomID || (beforeID > 0 && m.ID >= beforeID) {
+			continue
+		}
+		body := strings.ToLower(m.Body)
+		if !slices.ContainsFunc(terms, func(t string) bool { return !strings.Contains(body, t) }) {
+			result = append(result, m)
+		}
+		if len(result) == limit {
+			break
+		}
+	}
+	return result, nil
+}
+
 // fakeMembership: множество пар (roomID, userID).
 type fakeMembership map[[2]int64]bool
 
@@ -291,5 +314,29 @@ func TestMarkRead_Errors(t *testing.T) {
 	}
 	if len(pub.reads) != 0 {
 		t.Errorf("failed mark read must not publish, got %+v", pub.reads)
+	}
+}
+
+func TestSearch(t *testing.T) {
+	svc, _, _ := newTestMessageService()
+	for _, body := range []string{"Привет, мир", "привет всем", "пока"} {
+		if _, err := svc.Send(t.Context(), testRoomID, memberID, body); err != nil {
+			t.Fatalf("send: %v", err)
+		}
+	}
+
+	found, err := svc.Search(t.Context(), testRoomID, memberID, "ПРИВЕТ", service.HistoryQuery{})
+	if err != nil {
+		t.Fatalf("search: %v", err)
+	}
+	if len(found) != 2 {
+		t.Errorf("expected 2 results, got %d", len(found))
+	}
+
+	if _, err := svc.Search(t.Context(), testRoomID, strangerID, "привет", service.HistoryQuery{}); !errors.Is(err, domain.ErrForbidden) {
+		t.Errorf("non-member: expected ErrForbidden, got %v", err)
+	}
+	if _, err := svc.Search(t.Context(), testRoomID, memberID, "  ", service.HistoryQuery{}); !errors.Is(err, domain.ErrValidation) {
+		t.Errorf("empty query: expected ErrValidation, got %v", err)
 	}
 }

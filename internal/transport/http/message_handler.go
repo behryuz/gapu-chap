@@ -13,6 +13,7 @@ type MessageService interface {
 	Send(ctx context.Context, roomID, authorID int64, body string) (*domain.Message, error)
 	History(ctx context.Context, roomID, userID int64, q service.HistoryQuery) ([]domain.Message, error)
 	MarkRead(ctx context.Context, roomID, userID, messageID int64) error
+	Search(ctx context.Context, roomID, userID int64, query string, q service.HistoryQuery) ([]domain.Message, error)
 }
 
 type MessageHandler struct {
@@ -86,6 +87,23 @@ func (h *MessageHandler) Send(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *MessageHandler) History(w http.ResponseWriter, r *http.Request) {
+	h.listMessages(w, r, func(ctx context.Context, roomID, userID int64, q service.HistoryQuery) ([]domain.Message, error) {
+		return h.messages.History(ctx, roomID, userID, q)
+	})
+}
+
+// Search — GET /api/rooms/{id}/messages/search?q=...&before=&limit=
+func (h *MessageHandler) Search(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query().Get("q")
+	h.listMessages(w, r, func(ctx context.Context, roomID, userID int64, q service.HistoryQuery) ([]domain.Message, error) {
+		return h.messages.Search(ctx, roomID, userID, query, q)
+	})
+}
+
+type listFunc func(ctx context.Context, roomID, userID int64, q service.HistoryQuery) ([]domain.Message, error)
+
+// listMessages — общая часть истории и поиска: разбор пути, курсора и лимита, формат ответа.
+func (h *MessageHandler) listMessages(w http.ResponseWriter, r *http.Request, list listFunc) {
 	authUser, ok := authUserFromContext(r.Context())
 	if !ok {
 		writeError(w, http.StatusUnauthorized, "unauthorized")
@@ -109,7 +127,7 @@ func (h *MessageHandler) History(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	messages, err := h.messages.History(r.Context(), roomID, authUser.ID, service.HistoryQuery{
+	messages, err := list(r.Context(), roomID, authUser.ID, service.HistoryQuery{
 		BeforeID: before,
 		Limit:    int(min(limit, 1000)),
 	})

@@ -83,50 +83,22 @@
 
 ```
 gapu-chap/
-├── cmd/
-│   └── server/
-│       └── main.go              # точка входа: конфиг, БД, сборка зависимостей, запуск
+├── cmd/server/main.go           # точка входа: конфиг, пул БД, миграции, HTTP-сервер, graceful shutdown
 ├── internal/
-│   ├── config/
-│   │   └── config.go            # чтение переменных окружения
-│   ├── domain/
-│   │   ├── user.go              # сущности: User, Room, Message ...
-│   │   ├── room.go
-│   │   ├── message.go
-│   │   └── errors.go            # ErrNotFound, ErrForbidden, ErrConflict ...
-│   ├── auth/
-│   │   ├── jwt.go               # выпуск и проверка токенов
-│   │   └── password.go          # bcrypt
-│   ├── repository/
-│   │   └── postgres/
-│   │       ├── user.go
-│   │       ├── room.go
-│   │       └── message.go
-│   ├── service/
-│   │   ├── auth.go              # регистрация, логин
-│   │   ├── room.go              # комнаты, участники, права
-│   │   ├── message.go           # сообщения, история, поиск, прочитано
-│   │   └── moderation.go        # блокировки
-│   └── transport/
-│       ├── http/
-│       │   ├── router.go        # регистрация маршрутов
-│       │   ├── middleware.go    # auth, логирование, recover
-│       │   ├── response.go      # writeJSON, writeError
-│       │   ├── auth_handler.go
-│       │   ├── room_handler.go
-│       │   └── message_handler.go
-│       └── ws/
-│           ├── hub.go           # реестр подключений и рассылка по комнатам
-│           ├── client.go        # одно соединение: очередь send, writePump
-│           ├── events.go        # типы входящих/исходящих событий
-│           └── server.go        # HTTP → WebSocket upgrade, readLoop, обработка событий
-├── migrations/
-│   └── 00001_init.sql
-├── docker-compose.yml
-├── Makefile
-├── .env.example
-├── go.mod
-└── README.md
+│   ├── app/app.go               # composition root: собирает слои (его же используют e2e-тесты)
+│   ├── config/                  # переменные окружения
+│   ├── domain/                  # User, Room, Message, роли, ошибки (ErrNotFound, ErrBanned …)
+│   ├── auth/                    # JWT и bcrypt
+│   ├── repository/postgres/     # SQL: user, room, message, migrate (goose + embed)
+│   ├── service/                 # бизнес-правила: auth, user, room (+DM), message (+поиск), moderation
+│   ├── transport/
+│   │   ├── http/                # роутер, middleware, хендлеры, маппинг ошибок
+│   │   └── ws/                  # Hub, Client, протокол событий, Server
+│   └── testutil/testdb/         # временная PostgreSQL-база для интеграционных тестов
+├── migrations/                  # 00001…00007 + embed.go (миграции внутри бинарника)
+├── Dockerfile                   # многоэтапная сборка → distroless, ~22 МБ
+├── docker-compose.yaml          # postgres; с профилем app — ещё бэкенд и фронтенд
+└── Makefile
 ```
 
 ---
@@ -134,16 +106,17 @@ gapu-chap/
 ## 4. Модель данных
 
 ```sql
-users          (id, username UNIQUE, password_hash, role ['user'|'moderator'],
-                is_banned, created_at)
+users          (id, username UNIQUE без учёта регистра, first_name, last_name, password_hash,
+                role ['user'|'moderator'], banned_at NULL, created_at)
 
-rooms          (id, name UNIQUE без учёта регистра, kind ['public'|'direct'], owner_id → users, created_at)
+rooms          (id, name, kind ['public'|'direct'], dm_key UNIQUE NULL, owner_id → users, created_at)
+               -- имя уникально (без учёта регистра) только среди публичных комнат
 
 room_members   (room_id → rooms, user_id → users, joined_at,
                 last_read_message_id,           -- отметка «прочитано»
                 PRIMARY KEY (room_id, user_id))
 
-messages       (id BIGSERIAL, room_id → rooms, author_id → users, body,
+messages       (id IDENTITY, room_id → rooms, author_id → users, body,
                 created_at,
                 search_vector tsvector GENERATED ALWAYS AS (to_tsvector('simple', body)) STORED)
 
@@ -155,6 +128,16 @@ messages USING GIN (search_vector) -- полнотекстовый поиск
 **Проектные решения:**
 - **DM = комната с `kind = 'direct'`** и ровно двумя участниками. Вся логика сообщений,
   истории, прочитанного и поиска переиспользуется без дублирования.
+  Пара защищена уникальным `dm_key = 'dm:<меньший id>:<больший id>'`: два одновременных
+  «открыть диалог» не создадут два диалога (`INSERT … ON CONFLICT (dm_key) DO NOTHING`).
+  Посторонний не видит чужой диалог: `GET` и `members` отвечают 404, вступить нельзя, выйти — тоже.
+- **Поиск** — PostgreSQL full-text: `search_vector` генерирует сама база (`GENERATED … STORED`),
+  индекс GIN, словарь `simple` (одинаково для русского и английского) и поиск по началу слова
+  (`прив:* & мир:*`). Ввод пользователя превращается в tsquery на сервере: остаются только буквы
+  и цифры, поэтому синтаксис tsquery снаружи недоступен.
+- **Блокировка** — `banned_at` в базе. Middleware на каждый запрос читает аккаунт по первичному
+  ключу: бан и снятие роли действуют сразу, а не когда истечёт JWT. Открытые WebSocket
+  забаненного закрываются кодом `4003`, по нему клиент понимает, что переподключаться не нужно.
 - **«Прочитано» через `last_read_message_id`**, а не флаг на каждом сообщении: одна строка
   на пару (пользователь, комната) вместо N строк. Количество непрочитанных =
   `COUNT(*) WHERE id > last_read_message_id` (свои сообщения не считаются). Отметка
@@ -187,12 +170,17 @@ messages USING GIN (search_vector) -- полнотекстовый поиск
 | `GET` | `/api/rooms/{id}/members` | Участники (с `last_read_message_id` — для «прочитано») | авторизованные |
 | `POST` | `/api/rooms/{id}/messages` | Отправить сообщение `{body}` (тот же сервис, что и WebSocket) | участники |
 | `GET` | `/api/rooms/{id}/messages?before=&limit=` | История сообщений | участники |
-| `GET` | `/api/rooms/{id}/messages/search?q=` | Поиск по истории | участники |
+| `GET` | `/api/rooms/{id}/messages/search?q=&before=&limit=` | Поиск по истории (по началу слов, все слова) | участники |
 | `POST` | `/api/rooms/{id}/read` | Отметить прочитанным `{message_id}` → 204 (отметка двигается только вперёд) | участники |
-| `POST` | `/api/dm/{user_id}` | Открыть (или получить) DM-комнату | авторизованные |
+| `POST` | `/api/dm/{user_id}` | Открыть личный диалог: 201 — создан, 200 — уже был | авторизованные |
+| `GET` | `/api/users?q=` | Поиск пользователей по началу username/имени/фамилии | авторизованные |
 | `GET` | `/api/users/online` | Список онлайн-пользователей | авторизованные |
-| `POST` | `/api/moderation/users/{id}/ban` | Заблокировать | **модератор** |
+| `POST` | `/api/moderation/users/{id}/ban` | Заблокировать (модератора — нельзя, себя — нельзя) | **модератор** |
 | `POST` | `/api/moderation/users/{id}/unban` | Разблокировать | **модератор** |
+
+Заблокированный пользователь на любой запрос получает `403 {"error": "user is banned"}`,
+вход тоже возвращает 403 (но только при верном пароле — чтобы не раскрывать факт бана).
+Модератора назначают вручную: `make promote username=alice`.
 
 Формат ошибки (единый для всех):
 ```json
@@ -231,6 +219,7 @@ messages USING GIN (search_vector) -- полнотекстовый поиск
 | `presence` | `{ "user_id", "username", "online": true }` | Пользователь появился/ушёл (рассылается всем подключённым) |
 | `room.left` | `{ "room_id" }` | Вы вышли из комнаты — подписка снята (во всех вкладках) |
 | `room.deleted` | `{ "room_id" }` | Комната удалена владельцем — подписка снята у всех |
+| `room.joined` | `{ "room_id" }` | Вас добавили в комнату (вступили с другой вкладки или с вами открыли диалог) — соединение уже подписано |
 | `room.subscribed` | `{ "room_id" }` | Подтверждение подписки |
 | `error` | `{ "message": "..." }` | Ошибка обработки события |
 
@@ -296,6 +285,35 @@ make run                      # запустить сервер на :8081
 | `DATABASE_URL` | `postgres://chat:chat@localhost:5434/chat?sslmode=disable` | Подключение к БД |
 | `JWT_SECRET` | `change-me` | Секрет для подписи токенов |
 | `JWT_TTL` | `24h` | Время жизни токена |
+| `MIGRATE_ON_START` | `false` | Применять миграции при старте (в Docker — `true`) |
+
+### Всё приложение в Docker
+
+```bash
+make up      # postgres + бэкенд + фронтенд (из ../gapu-chap-front) → http://localhost:8080
+make down    # остановить приложение (база для разработки остаётся)
+```
+
+Бэкенд — distroless-образ (~22 МБ, процесс не от root), фронтенд — nginx со статикой.
+nginx проксирует `/api` и `/ws` на бэкенд с тем же `Host`, поэтому браузеру не нужен CORS,
+а проверка `Origin` у WebSocket проходит.
+
+### Тесты
+
+```bash
+make test               # unit-тесты: сервисы на фейках, Hub, middleware — без базы, за секунды
+make test-integration   # + интеграционные и сквозные тесты на настоящем PostgreSQL
+```
+
+Интеграционные тесты создают **свою временную базу на каждый тест**, применяют миграции
+и удаляют её после — тесты идут параллельно и не трогают dev-данные. Без
+`TEST_DATABASE_URL` они пропускаются, поэтому `make test` базы не требует.
+
+| Что проверяем | Где |
+|---|---|
+| SQL репозиториев: уникальность без учёта регистра, транзакции, «прочитано только вперёд», непрочитанные, курсор, full-text, гонка при создании DM | `internal/repository/postgres/*_integration_test.go` |
+| Все миграции откатываются (`Down` до нуля) и накатываются снова | `migrate_integration_test.go` |
+| Требования задания через HTTP + WebSocket: автор из токена, права на комнаты, real-time, «прочитано», приватность DM, поиск, бан с закрытием сокета | `internal/app/app_integration_test.go` |
 
 Проверка WebSocket вручную:
 ```bash
@@ -317,11 +335,13 @@ websocat "ws://localhost:8081/ws?token=<TOKEN>"
 - [x] **Шаг 5.** Сообщения через REST: сохранение + история с курсорной пагинацией
 - [x] **Шаг 6.** WebSocket: Hub, Client, подписка на комнату, `message.send` → `message.new`
 - [x] **Шаг 7.** Статус «онлайн» (`presence`)
-- [ ] **Шаг 8.** Отметка «прочитано» и счётчик непрочитанных
-- [ ] **Шаг 9.** Личные сообщения (DM)
-- [ ] **Шаг 10.** Поиск по истории
-- [ ] **Шаг 11.** Роль модератора и блокировка пользователей
-- [ ] **Шаг 12.** Тесты (unit для сервисов с моками, интеграционные для репозиториев), Dockerfile
+- [x] **Шаг 8.** Отметка «прочитано» и счётчик непрочитанных
+- [x] **Шаг 9.** Личные сообщения (DM) + поиск пользователей
+- [x] **Шаг 10.** Поиск по истории (PostgreSQL full-text)
+- [x] **Шаг 11.** Роль модератора и блокировка пользователей
+- [x] **Шаг 12.** Интеграционные и сквозные тесты на PostgreSQL, Dockerfile, запуск в Docker Compose
+
+Веб-клиент — в соседнем репозитории [gapu-chap-front](../gapu-chap-front) (React, Feature-Sliced Design).
 
 ---
 
@@ -329,9 +349,14 @@ websocat "ws://localhost:8081/ws?token=<TOKEN>"
 
 - Пароли только в виде bcrypt-хеша, никогда не логируются и не возвращаются в API.
 - JWT подписывается HMAC-SHA256; при проверке **явно проверяется алгоритм** (защита от `alg: none`).
-- В токен кладутся только `uid` (user ID), `username`, `role`, `iat`, `exp`.
+- В токен кладутся только `uid` (user ID), `username`, `iat`, `exp`. Роль и бан — не в токене:
+  их читают из базы на каждом запросе, чтобы изменения действовали сразу.
 - Автор сообщения — только из контекста/соединения, никогда из тела запроса.
 - Все SQL-запросы параметризованные (`$1, $2`) — защита от SQL-инъекций.
 - Ограничения: длина сообщения (например, 4000 символов), размер WebSocket-фрейма
   (`conn.SetReadLimit`), лимит `limit` в пагинации.
-- Заблокированный пользователь: логин запрещён, а активные WS-соединения закрываются.
+- Заблокированный пользователь: логин запрещён, REST отвечает 403, а активные WS-соединения
+  закрываются кодом `4003`; повторное подключение к WebSocket тоже отклоняется (403).
+- WebSocket проверяет `Origin` (по умолчанию в `coder/websocket`): чужой сайт не откроет
+  соединение от имени пользователя (Cross-Site WebSocket Hijacking).
+- Отменённые клиентом запросы (`context.Canceled`) не считаются ошибкой сервера: код 499, без ERROR в логе.

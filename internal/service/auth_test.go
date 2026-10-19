@@ -173,3 +173,22 @@ func TestLogin(t *testing.T) {
 		})
 	}
 }
+
+func TestLogin_Banned(t *testing.T) {
+	repo := newFakeUserRepo()
+	svc := service.NewAuthService(repo, fakeHasher{}, fakeTokens{})
+	if _, err := svc.Register(t.Context(), service.RegisterInput{
+		FirstName: "Bob", Username: "bob", Password: "password123",
+	}); err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	now := time.Now()
+	repo.byUsername["bob"].BannedAt = &now
+
+	if _, err := svc.Login(t.Context(), "bob", "wrong-password"); !errors.Is(err, domain.ErrInvalidCredentials) {
+		t.Errorf("wrong password must not reveal the ban, got %v", err)
+	}
+	if _, err := svc.Login(t.Context(), "bob", "password123"); !errors.Is(err, domain.ErrBanned) {
+		t.Errorf("expected ErrBanned, got %v", err)
+	}
+}

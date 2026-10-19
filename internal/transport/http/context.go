@@ -1,10 +1,15 @@
 package http
 
-import "context"
+import (
+	"context"
+
+	"gapu-chap/internal/domain"
+)
 
 type AuthUser struct {
 	ID       int64
 	Username string
+	Role     domain.Role
 }
 
 type ctxKey int

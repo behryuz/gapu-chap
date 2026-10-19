@@ -12,6 +12,7 @@ type Config struct {
 	DatabaseURL     string
 	JWTSecret       string
 	JWTTTL          time.Duration
+	MigrateOnStart  bool
 }
 
 func Load() (*Config, error) {
@@ -45,6 +46,7 @@ func Load() (*Config, error) {
 		DatabaseURL:     databaseURL,
 		JWTSecret:       jwtSecret,
 		JWTTTL:          jwtTTL,
+		MigrateOnStart:  getEnv("MIGRATE_ON_START", "false") == "true",
 	}, nil
 }
 
