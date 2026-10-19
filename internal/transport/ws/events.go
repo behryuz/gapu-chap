@@ -17,6 +17,7 @@ const (
 
 const (
 	typeRoomSubscribed = "room.subscribed"
+	typeRoomJoined     = "room.joined"
 	typeRoomLeft       = "room.left"
 	typeRoomDeleted    = "room.deleted"
 	typeMessageNew     = "message.new"

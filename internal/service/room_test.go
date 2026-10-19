@@ -25,8 +25,13 @@ func newFakeRoomRepo() *fakeRoomRepo {
 }
 
 type fakeRoomNotifier struct {
+	joined  [][2]int64
 	left    [][2]int64
 	deleted []int64
+}
+
+func (n *fakeRoomNotifier) MemberJoined(roomID, userID int64) {
+	n.joined = append(n.joined, [2]int64{roomID, userID})
 }
 
 func (n *fakeRoomNotifier) MemberLeft(roomID, userID int64) {
@@ -51,9 +56,26 @@ func (r *fakeRoomRepo) IsMember(_ context.Context, roomID, userID int64) (bool, 
 	return r.isMember(roomID, userID), nil
 }
 
+func (r *fakeRoomRepo) CreateDirect(_ context.Context, userID, peerID int64) (*domain.Room, bool, error) {
+	key := domain.DirectKey(userID, peerID)
+	for _, room := range r.rooms {
+		if room.IsDirect() && room.Name == key {
+			found := *room
+			return &found, false, nil
+		}
+	}
+	r.nextID++
+	room := &domain.Room{ID: r.nextID, Name: key, OwnerID: userID, Kind: domain.RoomKindDirect}
+	r.rooms[room.ID] = room
+	r.members[room.ID] = map[int64]bool{userID: true, peerID: true}
+	created := *room
+	return &created, true, nil
+}
+
 func (r *fakeRoomRepo) Create(_ context.Context, room *domain.Room) error {
 	r.nextID++
 	room.ID = r.nextID
+	room.Kind = domain.RoomKindPublic
 	room.CreatedAt = time.Now()
 
 	stored := *room
@@ -290,4 +312,104 @@ func TestRoom_NotifiesHubOnLeaveAndDelete(t *testing.T) {
 	if len(notifier.deleted) != 1 || notifier.deleted[0] != room.ID {
 		t.Errorf("expected RoomDeleted(%d), got %v", room.ID, notifier.deleted)
 	}
+}
+
+const strangerUserID int64 = 3
+
+func TestOpenDirect(t *testing.T) {
+	repo := newFakeRoomRepo()
+	notifier := &fakeRoomNotifier{}
+	svc := service.NewRoomService(repo, notifier)
+
+	room, created, err := svc.OpenDirect(t.Context(), ownerID, otherUserID)
+	if err != nil || !created {
+		t.Fatalf("first open must create the room, created=%v err=%v", created, err)
+	}
+	if !room.IsDirect() {
+		t.Errorf("expected direct room, got kind %q", room.Kind)
+	}
+	if len(notifier.joined) != 2 {
+		t.Errorf("both participants must be subscribed, got %v", notifier.joined)
+	}
+
+	// Собеседник открывает тот же диалог со своей стороны — второй не создаётся.
+	again, created, err := svc.OpenDirect(t.Context(), otherUserID, ownerID)
+	if err != nil || created || again.ID != room.ID {
+		t.Fatalf("expected the same room %d, got %+v created=%v err=%v", room.ID, again, created, err)
+	}
+	if len(notifier.joined) != 2 {
+		t.Errorf("reopening must not notify again, got %v", notifier.joined)
+	}
+}
+
+func TestOpenDirect_WithYourself(t *testing.T) {
+	svc := service.NewRoomService(newFakeRoomRepo(), &fakeRoomNotifier{})
+
+	_, _, err := svc.OpenDirect(t.Context(), ownerID, ownerID)
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("expected ErrValidation, got %v", err)
+	}
+}
+
+func TestDirectRoom_Rules(t *testing.T) {
+	repo := newFakeRoomRepo()
+	svc := service.NewRoomService(repo, &fakeRoomNotifier{})
+	room, _, err := svc.OpenDirect(t.Context(), ownerID, otherUserID)
+	if err != nil {
+		t.Fatalf("open direct: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		action  func() error
+		wantErr error
+	}{
+		{"stranger cannot join", func() error { return svc.Join(t.Context(), room.ID, strangerUserID) }, domain.ErrNotFound},
+		{"stranger does not see the room", func() error {
+			_, err := svc.Get(t.Context(), room.ID, strangerUserID)
+			return err
+		}, domain.ErrNotFound},
+		{"stranger does not see members", func() error {
+			_, err := svc.Members(t.Context(), room.ID, strangerUserID)
+			return err
+		}, domain.ErrNotFound},
+		{"participant cannot leave", func() error { return svc.Leave(t.Context(), room.ID, otherUserID) }, domain.ErrForbidden},
+		{"participant sees the room", func() error {
+			_, err := svc.Get(t.Context(), room.ID, otherUserID)
+			return err
+		}, nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if err := tt.action(); !errors.Is(err, tt.wantErr) {
+				t.Fatalf("expected %v, got %v", tt.wantErr, err)
+			}
+		})
+	}
+	if repo.isMember(room.ID, strangerUserID) {
+		t.Error("stranger must not become a member of a direct room")
+	}
+}
+
+func TestRoomJoin_NotifiesHub(t *testing.T) {
+	_, _, room := setupRoom(t)
+	notifier := &fakeRoomNotifier{}
+	svc := service.NewRoomService(newFakeRoomRepoWith(room), notifier)
+
+	if err := svc.Join(t.Context(), room.ID, otherUserID); err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	if len(notifier.joined) != 1 || notifier.joined[0] != [2]int64{room.ID, otherUserID} {
+		t.Errorf("expected MemberJoined(%d, %d), got %v", room.ID, otherUserID, notifier.joined)
+	}
+}
+
+func newFakeRoomRepoWith(room *domain.Room) *fakeRoomRepo {
+	repo := newFakeRoomRepo()
+	stored := *room
+	repo.rooms[room.ID] = &stored
+	repo.members[room.ID] = map[int64]bool{room.OwnerID: true}
+	repo.nextID = room.ID
+	return repo
 }

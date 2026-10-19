@@ -11,23 +11,25 @@ import (
 	"gapu-chap/internal/domain"
 )
 
-type presence struct {
+// userConns — все соединения одного пользователя (несколько вкладок/устройств).
+// Пользователь онлайн, пока у него есть хотя бы одно соединение.
+type userConns struct {
 	username string
-	conns    int
+	clients  map[*Client]struct{}
 }
 
 type Hub struct {
 	mu      sync.RWMutex
 	clients map[*Client]struct{}
 	rooms   map[int64]map[*Client]struct{}
-	online  map[int64]*presence
+	users   map[int64]*userConns
 }
 
 func NewHub() *Hub {
 	return &Hub{
 		clients: make(map[*Client]struct{}),
 		rooms:   make(map[int64]map[*Client]struct{}),
-		online:  make(map[int64]*presence),
+		users:   make(map[int64]*userConns),
 	}
 }
 
@@ -37,12 +39,11 @@ func (h *Hub) register(c *Client) {
 
 	h.clients[c] = struct{}{}
 
-	if p, ok := h.online[c.userID]; ok {
-		p.conns++
+	if uc, ok := h.users[c.userID]; ok {
+		uc.clients[c] = struct{}{}
 		return
 	}
-
-	h.online[c.userID] = &presence{username: c.username, conns: 1}
+	h.users[c.userID] = &userConns{username: c.username, clients: map[*Client]struct{}{c: {}}}
 	h.notifyAllLocked(typePresence, presencePayload{UserID: c.userID, Username: c.username, Online: true})
 }
 
@@ -58,12 +59,12 @@ func (h *Hub) unregister(c *Client) {
 		h.removeFromRoomLocked(roomID, c)
 	}
 
-	p := h.online[c.userID]
-	p.conns--
-	if p.conns > 0 {
+	uc := h.users[c.userID]
+	delete(uc.clients, c)
+	if len(uc.clients) > 0 {
 		return
 	}
-	delete(h.online, c.userID)
+	delete(h.users, c.userID)
 	h.notifyAllLocked(typePresence, presencePayload{UserID: c.userID, Username: c.username, Online: false})
 }
 
@@ -71,6 +72,10 @@ func (h *Hub) subscribe(roomID int64, c *Client) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
+	h.subscribeLocked(roomID, c)
+}
+
+func (h *Hub) subscribeLocked(roomID int64, c *Client) {
 	if h.rooms[roomID] == nil {
 		h.rooms[roomID] = make(map[*Client]struct{})
 	}
@@ -131,6 +136,28 @@ func (h *Hub) PublishRead(r domain.ReadReceipt) {
 	h.broadcast(r.RoomID, data)
 }
 
+// MemberJoined подписывает все соединения пользователя на комнату и сообщает им об этом:
+// после вступления (в том числе с другой вкладки) и при создании личного диалога.
+func (h *Hub) MemberJoined(roomID, userID int64) {
+	data, err := encodeEvent(typeRoomJoined, roomPayload{RoomID: roomID})
+	if err != nil {
+		slog.Error("encode websocket event", "type", typeRoomJoined, "error", err)
+		return
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	uc, ok := h.users[userID]
+	if !ok {
+		return
+	}
+	for c := range uc.clients {
+		h.subscribeLocked(roomID, c)
+		c.deliver(data)
+	}
+}
+
 func (h *Hub) MemberLeft(roomID, userID int64) {
 	data, err := encodeEvent(typeRoomLeft, roomPayload{RoomID: roomID})
 	if err != nil {
@@ -168,9 +195,9 @@ func (h *Hub) RoomDeleted(roomID int64) {
 
 func (h *Hub) OnlineUsers() []domain.OnlineUser {
 	h.mu.RLock()
-	users := make([]domain.OnlineUser, 0, len(h.online))
-	for id, p := range h.online {
-		users = append(users, domain.OnlineUser{ID: id, Username: p.username})
+	users := make([]domain.OnlineUser, 0, len(h.users))
+	for id, uc := range h.users {
+		users = append(users, domain.OnlineUser{ID: id, Username: uc.username})
 	}
 	h.mu.RUnlock()
 
@@ -178,6 +205,21 @@ func (h *Hub) OnlineUsers() []domain.OnlineUser {
 		return cmp.Compare(a.Username, b.Username)
 	})
 	return users
+}
+
+// StatusBanned — код закрытия из диапазона приложений (4000–4999): клиент по нему
+// понимает, что переподключаться бессмысленно.
+const StatusBanned websocket.StatusCode = 4003
+
+func (h *Hub) DisconnectUser(userID int64) {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	if uc, ok := h.users[userID]; ok {
+		for c := range uc.clients {
+			c.close(StatusBanned, "banned")
+		}
+	}
 }
 
 func (h *Hub) CloseAll() {

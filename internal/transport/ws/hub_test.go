@@ -202,8 +202,8 @@ func TestHub_ConcurrentAccess(t *testing.T) {
 	}
 	wg.Wait()
 
-	if len(h.clients) != 0 || len(h.rooms) != 0 || len(h.online) != 0 {
-		t.Errorf("hub must be empty, got clients=%d rooms=%d online=%d", len(h.clients), len(h.rooms), len(h.online))
+	if len(h.clients) != 0 || len(h.rooms) != 0 || len(h.users) != 0 {
+		t.Errorf("hub must be empty, got clients=%d rooms=%d online=%d", len(h.clients), len(h.rooms), len(h.users))
 	}
 }
 
@@ -228,5 +228,32 @@ func TestHub_PublishRead(t *testing.T) {
 	}
 	if got := drain(t, outsider); len(got) != 0 {
 		t.Errorf("non-subscriber must not receive message.read, got %v", got)
+	}
+}
+
+func TestHub_MemberJoinedSubscribesAllTabs(t *testing.T) {
+	h := NewHub()
+	tab1, tab2, other := newTestClient(1), newTestClient(1), newTestClient(2)
+	for _, c := range []*Client{tab1, tab2, other} {
+		h.register(c)
+	}
+	for _, c := range []*Client{tab1, tab2, other} {
+		drain(t, c)
+	}
+
+	h.MemberJoined(5, 1)
+
+	for _, tab := range []*Client{tab1, tab2} {
+		if got := drain(t, tab); len(got) != 1 || got[0] != typeRoomJoined {
+			t.Errorf("each tab must receive room.joined, got %v", got)
+		}
+	}
+	if got := drain(t, other); len(got) != 0 {
+		t.Errorf("other users must not be notified, got %v", got)
+	}
+
+	h.broadcast(5, []byte("hello"))
+	if len(tab1.send) != 1 || len(tab2.send) != 1 {
+		t.Error("joined user must receive room messages in every tab")
 	}
 }

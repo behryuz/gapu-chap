@@ -12,11 +12,12 @@ import (
 type RoomService interface {
 	Create(ctx context.Context, ownerID int64, name string) (*domain.Room, error)
 	List(ctx context.Context) ([]domain.Room, error)
-	Get(ctx context.Context, id int64) (*domain.Room, error)
+	Get(ctx context.Context, roomID, userID int64) (*domain.Room, error)
 	Delete(ctx context.Context, roomID, actorID int64) error
 	Join(ctx context.Context, roomID, userID int64) error
 	Leave(ctx context.Context, roomID, userID int64) error
-	Members(ctx context.Context, roomID int64) ([]domain.Member, error)
+	Members(ctx context.Context, roomID, userID int64) ([]domain.Member, error)
+	OpenDirect(ctx context.Context, userID, peerID int64) (*domain.Room, bool, error)
 	MyRooms(ctx context.Context, userID int64) ([]domain.UserRoom, error)
 }
 
@@ -36,7 +37,13 @@ type roomResponse struct {
 	ID        int64     `json:"id"`
 	Name      string    `json:"name"`
 	OwnerID   int64     `json:"owner_id"`
+	Kind      string    `json:"kind"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+type peerResponse struct {
+	ID       int64  `json:"id"`
+	Username string `json:"username"`
 }
 
 type roomListResponse struct {
@@ -45,8 +52,9 @@ type roomListResponse struct {
 
 type userRoomResponse struct {
 	roomResponse
-	LastReadMessageID int64 `json:"last_read_message_id"`
-	UnreadCount       int64 `json:"unread_count"`
+	LastReadMessageID int64         `json:"last_read_message_id"`
+	UnreadCount       int64         `json:"unread_count"`
+	Peer              *peerResponse `json:"peer,omitempty"`
 }
 
 type userRoomListResponse struct {
@@ -67,7 +75,7 @@ type memberListResponse struct {
 }
 
 func toRoomResponse(r *domain.Room) roomResponse {
-	return roomResponse{ID: r.ID, Name: r.Name, OwnerID: r.OwnerID, CreatedAt: r.CreatedAt}
+	return roomResponse{ID: r.ID, Name: r.Name, OwnerID: r.OwnerID, Kind: string(r.Kind), CreatedAt: r.CreatedAt}
 }
 
 func (h *RoomHandler) Create(w http.ResponseWriter, r *http.Request) {
@@ -111,12 +119,18 @@ func (h *RoomHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RoomHandler) Get(w http.ResponseWriter, r *http.Request) {
+	authUser, ok := authUserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	roomID, err := pathID(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	room, err := h.rooms.Get(r.Context(), roomID)
+	room, err := h.rooms.Get(r.Context(), roomID, authUser.ID)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -185,13 +199,19 @@ func (h *RoomHandler) Leave(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *RoomHandler) Members(w http.ResponseWriter, r *http.Request) {
+	authUser, ok := authUserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
 	roomID, err := pathID(r, "id")
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 
-	members, err := h.rooms.Members(r.Context(), roomID)
+	members, err := h.rooms.Members(r.Context(), roomID, authUser.ID)
 	if err != nil {
 		writeServiceError(w, err)
 		return
@@ -226,11 +246,42 @@ func (h *RoomHandler) MyRooms(w http.ResponseWriter, r *http.Request) {
 
 	resp := userRoomListResponse{Rooms: make([]userRoomResponse, 0, len(rooms))}
 	for i := range rooms {
-		resp.Rooms = append(resp.Rooms, userRoomResponse{
+		item := userRoomResponse{
 			roomResponse:      toRoomResponse(&rooms[i].Room),
 			LastReadMessageID: rooms[i].LastReadMessageID,
 			UnreadCount:       rooms[i].UnreadCount,
-		})
+		}
+		if peer := rooms[i].Peer; peer != nil {
+			item.Peer = &peerResponse{ID: peer.ID, Username: peer.Username}
+		}
+		resp.Rooms = append(resp.Rooms, item)
 	}
 	writeJSON(w, http.StatusOK, resp)
+}
+
+// OpenDirect — POST /api/dm/{user_id}: 201, если диалог создан сейчас, 200 — если уже был.
+func (h *RoomHandler) OpenDirect(w http.ResponseWriter, r *http.Request) {
+	authUser, ok := authUserFromContext(r.Context())
+	if !ok {
+		writeError(w, http.StatusUnauthorized, "unauthorized")
+		return
+	}
+
+	peerID, err := pathID(r, "user_id")
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	room, created, err := h.rooms.OpenDirect(r.Context(), authUser.ID, peerID)
+	if err != nil {
+		writeServiceError(w, err)
+		return
+	}
+
+	status := http.StatusOK
+	if created {
+		status = http.StatusCreated
+	}
+	writeJSON(w, status, toRoomResponse(room))
 }

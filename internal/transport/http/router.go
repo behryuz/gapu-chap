@@ -12,19 +12,21 @@ type HealthChecker interface {
 }
 
 type RouterDeps struct {
-	DB       HealthChecker
-	Tokens   TokenParser
-	Auth     *AuthHandler
-	Users    *UserHandler
-	Rooms    *RoomHandler
-	Messages *MessageHandler
-	Presence *PresenceHandler
-	WS       http.Handler
+	DB         HealthChecker
+	Tokens     TokenParser
+	Accounts   AccountLoader
+	Auth       *AuthHandler
+	Users      *UserHandler
+	Rooms      *RoomHandler
+	Messages   *MessageHandler
+	Presence   *PresenceHandler
+	Moderation *ModerationHandler
+	WS         http.Handler
 }
 
 func NewRouter(d RouterDeps) http.Handler {
 	mux := http.NewServeMux()
-	authMW := requireAuth(d.Tokens)
+	authMW := requireAuth(d.Tokens, d.Accounts)
 
 	protected := func(pattern string, h http.HandlerFunc) {
 		mux.Handle(pattern, authMW(h))
@@ -39,7 +41,12 @@ func NewRouter(d RouterDeps) http.Handler {
 	// protected
 	protected("GET /api/me", d.Users.Me)
 	protected("GET /api/me/rooms", d.Rooms.MyRooms)
+	protected("GET /api/users", d.Users.Search)
 	protected("GET /api/users/online", d.Presence.Online)
+	protected("POST /api/dm/{user_id}", d.Rooms.OpenDirect)
+
+	protected("POST /api/moderation/users/{id}/ban", d.Moderation.Ban)
+	protected("POST /api/moderation/users/{id}/unban", d.Moderation.Unban)
 
 	protected("POST /api/rooms", d.Rooms.Create)
 	protected("GET /api/rooms", d.Rooms.List)
@@ -50,6 +57,7 @@ func NewRouter(d RouterDeps) http.Handler {
 	protected("GET /api/rooms/{id}/members", d.Rooms.Members)
 	protected("POST /api/rooms/{id}/messages", d.Messages.Send)
 	protected("GET /api/rooms/{id}/messages", d.Messages.History)
+	protected("GET /api/rooms/{id}/messages/search", d.Messages.Search)
 	protected("POST /api/rooms/{id}/read", d.Messages.MarkRead)
 
 	return logRequest(recoverPanic(mux))

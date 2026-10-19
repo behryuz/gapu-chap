@@ -25,6 +25,10 @@ type MessageService interface {
 	MarkRead(ctx context.Context, roomID, userID, messageID int64) error
 }
 
+type AccountLoader interface {
+	GetByID(ctx context.Context, id int64) (*domain.User, error)
+}
+
 type RoomAccess interface {
 	RequireMember(ctx context.Context, roomID, userID int64) error
 }
@@ -34,18 +38,34 @@ const eventTimeout = 5 * time.Second
 type Server struct {
 	hub      *Hub
 	tokens   TokenParser
+	accounts AccountLoader
 	messages MessageService
 	rooms    RoomAccess
 }
 
-func NewServer(hub *Hub, tokens TokenParser, messages MessageService, rooms RoomAccess) *Server {
-	return &Server{hub: hub, tokens: tokens, messages: messages, rooms: rooms}
+func NewServer(hub *Hub, tokens TokenParser, accounts AccountLoader, messages MessageService, rooms RoomAccess) *Server {
+	return &Server{hub: hub, tokens: tokens, accounts: accounts, messages: messages, rooms: rooms}
 }
 
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	claims, err := s.tokens.Parse(r.URL.Query().Get("token"))
 	if err != nil {
 		http.Error(w, "invalid or expired token", http.StatusUnauthorized)
+		return
+	}
+
+	// Токен ещё жив, но аккаунт могли удалить или заблокировать — проверяем по базе.
+	account, err := s.accounts.GetByID(r.Context(), claims.UserID)
+	switch {
+	case errors.Is(err, domain.ErrNotFound):
+		http.Error(w, "account not found", http.StatusUnauthorized)
+		return
+	case err != nil:
+		slog.Error("websocket: load account", "user_id", claims.UserID, "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+		return
+	case account.IsBanned():
+		http.Error(w, domain.ErrBanned.Error(), http.StatusForbidden)
 		return
 	}
 
@@ -165,10 +185,12 @@ func (s *Server) handleRead(ctx context.Context, c *Client, raw json.RawMessage)
 
 func publicError(err error) string {
 	switch {
-	case errors.Is(err, domain.ErrValidation), errors.Is(err, domain.ErrForbidden):
+	case errors.Is(err, domain.ErrValidation), errors.Is(err, domain.ErrForbidden), errors.Is(err, domain.ErrBanned):
 		return err.Error()
 	case errors.Is(err, domain.ErrNotFound):
 		return domain.ErrNotFound.Error()
+	case errors.Is(err, context.Canceled):
+		return "request cancelled"
 	default:
 		slog.Error("websocket event failed", "error", err)
 		return "internal error"
